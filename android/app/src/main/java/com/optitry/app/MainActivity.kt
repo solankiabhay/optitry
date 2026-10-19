@@ -430,6 +430,41 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         postInvalidate()
     }
 
+    private fun lensPath(rect: RectF, style: MainActivity.FrameStyle, inset: Float): android.graphics.Path {
+        val r = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
+        val path = android.graphics.Path()
+        val shape = style.name.lowercase()
+        when {
+            style.round || shape.contains("round") || shape.contains("circle") -> {
+                path.addOval(r, android.graphics.Path.Direction.CW)
+            }
+            shape.contains("aviator") || shape.contains("pilot") -> {
+                path.moveTo(r.left + r.width() * 0.08f, r.top + r.height() * 0.08f)
+                path.quadTo(r.centerX(), r.top - r.height() * 0.02f, r.right - r.width() * 0.08f, r.top + r.height() * 0.08f)
+                path.lineTo(r.right, r.top + r.height() * 0.48f)
+                path.quadTo(r.centerX(), r.bottom + r.height() * 0.12f, r.left, r.top + r.height() * 0.48f)
+                path.close()
+            }
+            shape.contains("cat") -> {
+                path.moveTo(r.left, r.top + r.height() * 0.12f)
+                path.lineTo(r.left + r.width() * 0.28f, r.top + r.height() * 0.02f)
+                path.quadTo(r.centerX(), r.top + r.height() * 0.12f, r.right, r.top - r.height() * 0.02f)
+                path.lineTo(r.right - r.width() * 0.06f, r.bottom - r.height() * 0.18f)
+                path.quadTo(r.centerX(), r.bottom + r.height() * 0.04f, r.left + r.width() * 0.08f, r.bottom - r.height() * 0.12f)
+                path.close()
+            }
+            shape.contains("sport") || shape.contains("square") || shape.contains("classic") || shape.contains("black") -> {
+                val radius = min(r.width() * 0.12f, r.height() * 0.16f)
+                path.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW)
+            }
+            else -> {
+                val radius = min(r.width() * 0.24f, r.height() * 0.28f)
+                path.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW)
+            }
+        }
+        return path
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val face = landmarks ?: return
@@ -470,13 +505,12 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         val rightRect = RectF(right.x - lensWidth / 2f, right.y - lensHeight / 2f,
             right.x + lensWidth / 2f, right.y + lensHeight / 2f)
         if (selectedStyle.sunglasses) {
-            canvas.drawRoundRect(leftRect, corner, corner, lensPaint)
-            canvas.drawRoundRect(rightRect, corner, corner, lensPaint)
+            canvas.drawPath(lensPath(leftRect, selectedStyle, 0f), lensPaint)
+            canvas.drawPath(lensPath(rightRect, selectedStyle, 0f), lensPaint)
         }
-        val radius = if (selectedStyle.round) min(lensWidth * 0.46f, lensHeight * 0.5f) else corner
-        // Premium layered frame: inner bevel, subtle highlights, and lens reflections.
-        canvas.drawRoundRect(leftRect, radius, radius, framePaint)
-        canvas.drawRoundRect(rightRect, radius, radius, framePaint)
+        // Give each family a genuinely different silhouette instead of recolouring one rounded rectangle.
+        canvas.drawPath(lensPath(leftRect, selectedStyle, 0f), framePaint)
+        canvas.drawPath(lensPath(rightRect, selectedStyle, 0f), framePaint)
         val inset = max(2f, lensHeight * 0.055f)
         val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(165, 255, 255, 255)
@@ -491,8 +525,8 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         }
         val innerLeft = RectF(leftRect.left + inset, leftRect.top + inset, leftRect.right - inset, leftRect.bottom - inset)
         val innerRight = RectF(rightRect.left + inset, rightRect.top + inset, rightRect.right - inset, rightRect.bottom - inset)
-        canvas.drawRoundRect(innerLeft, max(2f, radius - inset), max(2f, radius - inset), innerPaint)
-        canvas.drawRoundRect(innerRight, max(2f, radius - inset), max(2f, radius - inset), innerPaint)
+        canvas.drawPath(lensPath(innerLeft, selectedStyle, inset), innerPaint)
+        canvas.drawPath(lensPath(innerRight, selectedStyle, inset), innerPaint)
         canvas.drawLine(leftRect.left + inset * 2, leftRect.top + inset, leftRect.left + lensWidth * 0.27f, leftRect.top + inset, glintPaint)
         canvas.drawLine(rightRect.left + inset * 2, rightRect.top + inset, rightRect.left + lensWidth * 0.27f, rightRect.top + inset, glintPaint)
         if (selectedStyle.sunglasses) {
