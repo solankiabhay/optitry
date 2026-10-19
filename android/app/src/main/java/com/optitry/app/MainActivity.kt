@@ -15,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.PickVisualMediaRequest
@@ -35,6 +36,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
@@ -43,6 +45,32 @@ class MainActivity : AppCompatActivity() {
     private var faceLandmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
     private var faceFound = false
+    private var sunglassesMode = false
+    internal data class FrameStyle(val name: String, val color: Int, val sunglasses: Boolean, val round: Boolean)
+    private val opticalStyles = listOf(
+        FrameStyle("Classic Black", Color.rgb(35,35,39), false, false), FrameStyle("Crystal Clear", Color.rgb(160,210,218), false, true),
+        FrameStyle("Tortoise", Color.rgb(145,83,42), false, false), FrameStyle("Silver Metal", Color.rgb(190,198,205), false, true),
+        FrameStyle("Rose Gold", Color.rgb(205,135,125), false, true), FrameStyle("Navy Blue", Color.rgb(40,80,140), false, false),
+        FrameStyle("Forest Green", Color.rgb(42,112,83), false, true), FrameStyle("Burgundy", Color.rgb(120,35,60), false, false),
+        FrameStyle("Matte Grey", Color.rgb(100,105,115), false, false), FrameStyle("Champagne", Color.rgb(190,160,110), false, true),
+        FrameStyle("Retro Round", Color.rgb(65,65,70), false, true), FrameStyle("Bold Square", Color.rgb(25,25,28), false, false),
+        FrameStyle("Slim Gold", Color.rgb(205,170,90), false, true), FrameStyle("Transparent Blue", Color.rgb(95,165,205), false, false),
+        FrameStyle("Olive", Color.rgb(105,115,60), false, false), FrameStyle("Plum", Color.rgb(105,60,110), false, true),
+        FrameStyle("Copper", Color.rgb(170,105,70), false, false), FrameStyle("White Frame", Color.rgb(225,225,220), false, false),
+        FrameStyle("Teal", Color.rgb(35,135,140), false, true), FrameStyle("Aviator Optical", Color.rgb(185,150,85), false, true)
+    )
+    private val sunStyles = listOf(
+        FrameStyle("Black Classic", Color.rgb(25,25,28), true, false), FrameStyle("Aviator Gold", Color.rgb(200,165,85), true, true),
+        FrameStyle("Tortoise Sun", Color.rgb(125,70,35), true, false), FrameStyle("Silver Mirror", Color.rgb(175,190,205), true, true),
+        FrameStyle("Rose Tint", Color.rgb(190,105,125), true, true), FrameStyle("Ocean Blue", Color.rgb(35,100,175), true, false),
+        FrameStyle("Emerald", Color.rgb(35,120,85), true, true), FrameStyle("Burgundy Sun", Color.rgb(105,30,50), true, false),
+        FrameStyle("Smoke Grey", Color.rgb(90,95,105), true, false), FrameStyle("Champagne Sun", Color.rgb(185,150,95), true, true),
+        FrameStyle("Round Retro", Color.rgb(40,40,45), true, true), FrameStyle("Sport Square", Color.rgb(20,20,25), true, false),
+        FrameStyle("Gold Wire", Color.rgb(205,170,95), true, true), FrameStyle("Ice Blue", Color.rgb(100,170,210), true, false),
+        FrameStyle("Olive Pilot", Color.rgb(100,110,55), true, false), FrameStyle("Plum Fade", Color.rgb(100,55,105), true, true),
+        FrameStyle("Copper Lens", Color.rgb(165,95,60), true, false), FrameStyle("White Sport", Color.rgb(220,220,215), true, false),
+        FrameStyle("Teal Mirror", Color.rgb(30,130,135), true, true), FrameStyle("Retro Cat Eye", Color.rgb(30,30,35), true, false)
+    )
 
     private val imagePicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) status.text = "Product image selected. For accurate try-on, use a front-facing transparent PNG."
@@ -95,12 +123,19 @@ class MainActivity : AppCompatActivity() {
                 imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             }
         }
-        val catalog = Button(this).apply {
-            text = "Eyeglasses + sunglasses catalog"
-            setOnClickListener {
-                status.text = "Catalog scaffold has 20 eyeglasses and 20 sunglasses slots. Product overlays still need licensed image assets."
-            }
+        val categoryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val catalogPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val opticalButton = Button(this).apply {
+            text = "Eyeglasses (20)"
+            setOnClickListener { sunglassesMode = false; renderCatalog(catalogPanel) }
         }
+        val sunButton = Button(this).apply {
+            text = "Sunglasses (20)"
+            setOnClickListener { sunglassesMode = true; renderCatalog(catalogPanel) }
+        }
+        categoryRow.addView(opticalButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        categoryRow.addView(sunButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        renderCatalog(catalogPanel)
 
         root.addView(heading)
         root.addView(cameraFrame, LinearLayout.LayoutParams(
@@ -108,7 +143,8 @@ class MainActivity : AppCompatActivity() {
         ))
         root.addView(status)
         root.addView(pick)
-        root.addView(catalog)
+        root.addView(categoryRow)
+        root.addView(catalogPanel)
         setContentView(root)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -116,6 +152,32 @@ class MainActivity : AppCompatActivity() {
         } else {
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    private fun renderCatalog(panel: LinearLayout) {
+        panel.removeAllViews()
+        panel.addView(TextView(this).apply {
+            text = if (sunglassesMode) "SUNGLASSES • Choose a style" else "EYEGLASSES • Choose a style"
+            textSize = 12f
+            setTextColor(Color.rgb(165,243,252))
+            setPadding(4,4,4,4)
+        })
+        val scroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val items = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val styles = if (sunglassesMode) sunStyles else opticalStyles
+        styles.forEachIndexed { index, style ->
+            val item = Button(this).apply {
+                text = "%02d  %s".format(index + 1, style.name)
+                textSize = 11f
+                setOnClickListener {
+                    glassesOverlay.setFrameStyle(style)
+                    status.text = style.name + " selected • Look at the camera to preview the frame."
+                }
+            }
+            items.addView(item, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = 6 })
+        }
+        scroll.addView(items)
+        panel.addView(scroll)
     }
 
     private fun startCamera() {
@@ -241,16 +303,18 @@ class MainActivity : AppCompatActivity() {
 }
 
 private class GlassesOverlayView(context: android.content.Context) : View(context) {
-    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(34, 211, 238)
-        style = Paint.Style.STROKE
-        strokeWidth = 6f
-    }
-    private val bridgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(34, 211, 238)
-        style = Paint.Style.STROKE
-        strokeWidth = 5f
-        strokeCap = Paint.Cap.ROUND
+    private var selectedStyle = MainActivity.FrameStyle("Classic Black", Color.rgb(35,35,39), false, false)
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = selectedStyle.color; style = Paint.Style.STROKE; strokeWidth = 5f }
+    private val lensPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(24,150,190,210); style = Paint.Style.FILL }
+    private val bridgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = selectedStyle.color; style = Paint.Style.STROKE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND }
+
+    fun setFrameStyle(style: MainActivity.FrameStyle) {
+        selectedStyle = style
+        framePaint.color = style.color
+        bridgePaint.color = style.color
+        lensPaint.color = if (style.sunglasses) Color.argb(145,24,34,48) else Color.argb(24,150,190,210)
+        framePaint.strokeWidth = if (style.sunglasses) 7f else 5f
+        postInvalidate()
     }
     @Volatile private var landmarks: List<PointF>? = null
 
@@ -284,8 +348,13 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
             left.x + lensWidth / 2f, left.y + lensHeight / 2f)
         val rightRect = RectF(right.x - lensWidth / 2f, right.y - lensHeight / 2f,
             right.x + lensWidth / 2f, right.y + lensHeight / 2f)
-        canvas.drawRoundRect(leftRect, corner, corner, framePaint)
-        canvas.drawRoundRect(rightRect, corner, corner, framePaint)
+        if (selectedStyle.sunglasses) {
+            canvas.drawRoundRect(leftRect, corner, corner, lensPaint)
+            canvas.drawRoundRect(rightRect, corner, corner, lensPaint)
+        }
+        val radius = if (selectedStyle.round) min(lensWidth * 0.46f, lensHeight * 0.5f) else corner
+        canvas.drawRoundRect(leftRect, radius, radius, framePaint)
+        canvas.drawRoundRect(rightRect, radius, radius, framePaint)
         val bridgeY = (left.y + right.y) / 2f
         canvas.drawLine(leftRect.right, bridgeY, rightRect.left, bridgeY, bridgePaint)
         canvas.drawLine(leftRect.left, left.y, leftRect.left - lensHeight * 0.28f, left.y - lensHeight * 0.05f, bridgePaint)
