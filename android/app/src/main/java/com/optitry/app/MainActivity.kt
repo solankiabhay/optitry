@@ -368,7 +368,7 @@ class MainActivity : AppCompatActivity() {
                     val points = face.map { PointF(it.x(), it.y()) }
                     runOnUiThread {
                         if (photoMode) return@runOnUiThread
-                        glassesOverlay.updateLandmarks(points)
+                        glassesOverlay.updateLandmarks(points, upright.width, upright.height)
                         if (!faceFound) status.text = "Face detected • Move your head to test live tracking."
                         faceFound = true
                     }
@@ -419,6 +419,9 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
     @Volatile private var photoMode = false
     @Volatile private var photoBitmapWidth = 0
     @Volatile private var photoBitmapHeight = 0
+    @Volatile private var cameraImageWidth = 0
+    @Volatile private var cameraImageHeight = 0
+    private var smoothedLandmarks: List<PointF>? = null
     fun setPhotoMode(enabled: Boolean, bitmapWidth: Int = 0, bitmapHeight: Int = 0) {
         photoMode = enabled
         photoBitmapWidth = bitmapWidth
@@ -426,8 +429,28 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         postInvalidate()
     }
 
-    fun updateLandmarks(points: List<PointF>?) {
-        landmarks = points
+    fun updateLandmarks(points: List<PointF>?, imageWidth: Int = 0, imageHeight: Int = 0) {
+        if (imageWidth > 0 && imageHeight > 0) {
+            cameraImageWidth = imageWidth
+            cameraImageHeight = imageHeight
+        }
+        // Smooth small frame-to-frame detector noise so the glasses do not visibly jitter.
+        if (points == null) {
+            smoothedLandmarks = null
+            landmarks = null
+        } else if (photoMode || smoothedLandmarks == null || smoothedLandmarks!!.size != points.size) {
+            smoothedLandmarks = points.map { PointF(it.x, it.y) }
+            landmarks = smoothedLandmarks
+        } else {
+            val previous = smoothedLandmarks!!
+            val alpha = if (photoMode) 1f else 0.38f
+            val smooth = points.mapIndexed { index, p ->
+                PointF(previous[index].x + (p.x - previous[index].x) * alpha,
+                       previous[index].y + (p.y - previous[index].y) * alpha)
+            }
+            smoothedLandmarks = smooth
+            landmarks = smooth
+        }
         postInvalidate()
     }
 
@@ -484,6 +507,18 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
                     return PointF(offsetX + face[index].x * shownWidth, offsetY + face[index].y * shownHeight)
                 }
             }
+            // Match PreviewView's FILL_CENTER crop; the analyzer image and visible camera
+            // preview do not always have the same aspect ratio.
+            val imageWidth = cameraImageWidth
+            val imageHeight = cameraImageHeight
+            if (imageWidth > 0 && imageHeight > 0) {
+                val scale = max(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+                val shownWidth = imageWidth * scale
+                val shownHeight = imageHeight * scale
+                val offsetX = (width - shownWidth) / 2f
+                val offsetY = (height - shownHeight) / 2f
+                return PointF(offsetX + (1f - face[index].x) * shownWidth, offsetY + face[index].y * shownHeight)
+            }
             return PointF((1f - face[index].x) * width, face[index].y * height)
         }
 
@@ -506,9 +541,10 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         // nose-to-eye vertical offset estimates pitch, and the eye line gives roll.
         val yaw = (((nose.x - centerX) / eyeDistance) * 1.65f).coerceIn(-0.78f, 0.78f)
         val pitch = ((((nose.y - centerY) / eyeDistance) - 0.17f) * 1.25f).coerceIn(-0.42f, 0.42f)
-        val lensWidth = eyeDistance * 0.68f
-        val lensHeight = max(eyeDistance * 0.39f, 14f)
-        val lensCenterOffset = eyeDistance * 0.50f
+        val lensWidth = eyeDistance * 0.74f
+        // Typical eyewear lenses are taller than the previous short, goggle-like silhouette.
+        val lensHeight = max(eyeDistance * 0.54f, 18f)
+        val lensCenterOffset = eyeDistance * 0.54f
         val frameDepth = max(eyeDistance * 0.055f, 2.5f)
         val focalLength = eyeDistance * 3.8f
 
