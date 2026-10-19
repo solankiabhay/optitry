@@ -15,13 +15,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Gradle
+      - name: Set up Gradle 8.10.2 (compatible with Android Gradle Plugin 8.7)
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
       - name: Build debug APK
         working-directory: android
-        run: gradle assembleDebug
+        run: gradle assembleDebug --stacktrace
       - name: Upload debug APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: optitry-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
