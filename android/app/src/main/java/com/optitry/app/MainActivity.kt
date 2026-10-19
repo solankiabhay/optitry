@@ -17,6 +17,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.PickVisualMediaRequest
@@ -44,6 +45,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var glassesOverlay: GlassesOverlayView
     private lateinit var cameraFrame: FrameLayout
+    private lateinit var photoView: ImageView
+    private var selectedPhotoBitmap: android.graphics.Bitmap? = null
     private var faceLandmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
     private var faceFound = false
@@ -75,7 +78,7 @@ class MainActivity : AppCompatActivity() {
     )
 
     private val imagePicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) status.text = "Product image selected. For accurate try-on, use a front-facing transparent PNG."
+        if (uri != null) showPhotoTryOn(uri)
     }
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera() else status.text = "Camera permission is required for live try-on."
@@ -104,8 +107,14 @@ class MainActivity : AppCompatActivity() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
         glassesOverlay = GlassesOverlayView(this)
+        photoView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            visibility = View.GONE
+            setBackgroundColor(Color.rgb(24, 24, 27))
+        }
         cameraFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(24, 24, 27))
+            addView(photoView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(previewView, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             ))
@@ -120,7 +129,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(4, 10, 4, 10)
         }
         val pick = Button(this).apply {
-            text = "＋  Upload your product"
+            text = "＋  Try on your photo"
             setOnClickListener {
                 imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             }
@@ -159,6 +168,48 @@ class MainActivity : AppCompatActivity() {
         } else {
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    private fun saveTryOnPhoto() {
+    private fun showPhotoTryOn(uri: android.net.Uri) {
+        try {
+            val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                val source = android.graphics.ImageDecoder.createSource(contentResolver, uri)
+                android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ -> decoder.isMutableRequired = true }
+                    .copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.getBitmap(contentResolver, uri).copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+            }
+            selectedPhotoBitmap?.recycle()
+            selectedPhotoBitmap = bitmap
+            photoView.setImageBitmap(bitmap)
+            previewView.visibility = View.GONE
+            photoView.visibility = View.VISIBLE
+            status.text = "Photo loaded • detecting face for try-on…"
+            Thread {
+                try {
+                    val options = FaceLandmarker.FaceLandmarkerOptions.builder()
+                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                        .setRunningMode(RunningMode.IMAGE).setNumFaces(1).build()
+                    val detector = FaceLandmarker.createFromOptions(this, options)
+                    val result = detector.detect(BitmapImageBuilder(bitmap).build())
+                    val face = result.faceLandmarks().firstOrNull()
+                    detector.close()
+                    runOnUiThread {
+                        if (face != null) {
+                            glassesOverlay.updateLandmarks(face.map { PointF(it.x(), it.y()) })
+                            faceFound = true
+                            status.text = "Photo face detected • choose a frame and save your try-on."
+                        } else {
+                            glassesOverlay.updateLandmarks(null)
+                            faceFound = false
+                            status.text = "No face found. Try a clear, front-facing portrait."
+                        }
+                    }
+                } catch (e: Exception) { runOnUiThread { status.text = "Photo face detection failed: ${e.localizedMessage ?: "try another photo"}" } }
+            }.start()
+        } catch (e: Exception) { status.text = "Could not open photo: ${e.localizedMessage ?: "unsupported image"}" }
     }
 
     private fun saveTryOnPhoto() {
@@ -324,6 +375,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         cameraExecutor?.shutdown()
+        selectedPhotoBitmap?.recycle()
         faceLandmarker?.close()
         faceLandmarker = null
         super.onDestroy()
@@ -357,7 +409,10 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         if (face.size <= 362) return
 
         // MediaPipe's eye corners: 33/133 and 362/263. Preview is mirrored for the front camera.
-        fun point(index: Int): PointF = PointF((1f - face[index].x) * width, face[index].y * height)
+        fun point(index: Int): PointF {
+            val x = if (photoView.visibility == View.VISIBLE) face[index].x else 1f - face[index].x
+            return PointF(x * width, face[index].y * height)
+        }
         val leftEyeA = point(33)
         val leftEyeB = point(133)
         val rightEyeA = point(362)
