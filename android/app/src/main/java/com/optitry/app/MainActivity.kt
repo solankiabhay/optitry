@@ -436,8 +436,34 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
             canvas.drawRoundRect(rightRect, corner, corner, lensPaint)
         }
         val radius = if (selectedStyle.round) min(lensWidth * 0.46f, lensHeight * 0.5f) else corner
+        // Premium layered frame: inner bevel, subtle highlights, and lens reflections.
         canvas.drawRoundRect(leftRect, radius, radius, framePaint)
         canvas.drawRoundRect(rightRect, radius, radius, framePaint)
+        val inset = max(2f, lensHeight * 0.055f)
+        val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(165, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, lensHeight * 0.025f)
+        }
+        val glintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(if (selectedStyle.sunglasses) 105 else 55, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, lensHeight * 0.035f)
+            strokeCap = Paint.Cap.ROUND
+        }
+        val innerLeft = RectF(leftRect.left + inset, leftRect.top + inset, leftRect.right - inset, leftRect.bottom - inset)
+        val innerRight = RectF(rightRect.left + inset, rightRect.top + inset, rightRect.right - inset, rightRect.bottom - inset)
+        canvas.drawRoundRect(innerLeft, max(2f, radius - inset), max(2f, radius - inset), innerPaint)
+        canvas.drawRoundRect(innerRight, max(2f, radius - inset), max(2f, radius - inset), innerPaint)
+        canvas.drawLine(leftRect.left + inset * 2, leftRect.top + inset, leftRect.left + lensWidth * 0.27f, leftRect.top + inset, glintPaint)
+        canvas.drawLine(rightRect.left + inset * 2, rightRect.top + inset, rightRect.left + lensWidth * 0.27f, rightRect.top + inset, glintPaint)
+        if (selectedStyle.sunglasses) {
+            val reflection = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(36, 210, 235, 255); style = Paint.Style.FILL }
+            val shineLeft = RectF(leftRect.left + lensWidth * 0.12f, leftRect.top + lensHeight * 0.12f, leftRect.left + lensWidth * 0.36f, leftRect.bottom - lensHeight * 0.12f)
+            val shineRight = RectF(rightRect.left + lensWidth * 0.12f, rightRect.top + lensHeight * 0.12f, rightRect.left + lensWidth * 0.36f, rightRect.bottom - lensHeight * 0.12f)
+            canvas.drawRoundRect(shineLeft, corner, corner, reflection)
+            canvas.drawRoundRect(shineRight, corner, corner, reflection)
+        }
         val bridgeY = (left.y + right.y) / 2f
         canvas.drawLine(leftRect.right, bridgeY, rightRect.left, bridgeY, bridgePaint)
         canvas.drawLine(leftRect.left, left.y, leftRect.left - lensHeight * 0.28f, left.y - lensHeight * 0.05f, bridgePaint)
