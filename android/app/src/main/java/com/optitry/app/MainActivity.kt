@@ -656,4 +656,3 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         }
     }
 }
-}
