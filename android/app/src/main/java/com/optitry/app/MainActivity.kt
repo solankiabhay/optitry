@@ -470,7 +470,6 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         val face = landmarks ?: return
         if (face.size <= 362) return
 
-        // MediaPipe's eye corners: 33/133 and 362/263. Preview is mirrored for the front camera.
         fun point(index: Int): PointF {
             if (photoMode) {
                 val bitmapWidth = photoBitmapWidth
@@ -486,59 +485,174 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
             }
             return PointF((1f - face[index].x) * width, face[index].y * height)
         }
-        val leftEyeA = point(33)
-        val leftEyeB = point(133)
-        val rightEyeA = point(362)
-        val rightEyeB = point(263)
-        val c1 = PointF((leftEyeA.x + leftEyeB.x) / 2f, (leftEyeA.y + leftEyeB.y) / 2f)
-        val c2 = PointF((rightEyeA.x + rightEyeB.x) / 2f, (rightEyeA.y + rightEyeB.y) / 2f)
-        val left = if (c1.x < c2.x) c1 else c2
-        val right = if (c1.x < c2.x) c2 else c1
+
+        val eyeA = point(33)
+        val eyeB = point(133)
+        val eyeC = point(362)
+        val eyeD = point(263)
+        val centerA = PointF((eyeA.x + eyeB.x) / 2f, (eyeA.y + eyeB.y) / 2f)
+        val centerB = PointF((eyeC.x + eyeD.x) / 2f, (eyeC.y + eyeD.y) / 2f)
+        val left = if (centerA.x < centerB.x) centerA else centerB
+        val right = if (centerA.x < centerB.x) centerB else centerA
         val eyeDistance = abs(right.x - left.x)
         if (eyeDistance < 12f) return
 
-        val lensWidth = eyeDistance * 0.66f
-        val lensHeight = max(eyeDistance * 0.38f, 14f)
-        val corner = lensHeight * 0.22f
-        val leftRect = RectF(left.x - lensWidth / 2f, left.y - lensHeight / 2f,
-            left.x + lensWidth / 2f, left.y + lensHeight / 2f)
-        val rightRect = RectF(right.x - lensWidth / 2f, right.y - lensHeight / 2f,
-            right.x + lensWidth / 2f, right.y + lensHeight / 2f)
-        if (selectedStyle.sunglasses) {
-            canvas.drawPath(lensPath(leftRect, selectedStyle, 0f), lensPaint)
-            canvas.drawPath(lensPath(rightRect, selectedStyle, 0f), lensPaint)
+        val centerX = (left.x + right.x) / 2f
+        val centerY = (left.y + right.y) / 2f
+        val eyeRoll = kotlin.math.atan2((right.y - left.y).toDouble(), (right.x - left.x).toDouble()).toFloat()
+        val nose = point(1.coerceAtMost(face.lastIndex))
+        // Approximate head pose from stable facial landmarks: nose offset estimates yaw,
+        // nose-to-eye vertical offset estimates pitch, and the eye line gives roll.
+        val yaw = (((nose.x - centerX) / eyeDistance) * 1.65f).coerceIn(-0.78f, 0.78f)
+        val pitch = ((((nose.y - centerY) / eyeDistance) - 0.17f) * 1.25f).coerceIn(-0.42f, 0.42f)
+        val lensWidth = eyeDistance * 0.68f
+        val lensHeight = max(eyeDistance * 0.39f, 14f)
+        val lensCenterOffset = eyeDistance * 0.50f
+        val frameDepth = max(eyeDistance * 0.055f, 2.5f)
+        val focalLength = eyeDistance * 3.8f
+
+        data class P3(val x: Float, val y: Float, val z: Float)
+        fun project(p: P3): PointF {
+            val cy = kotlin.math.cos(yaw); val sy = kotlin.math.sin(yaw)
+            val cp = kotlin.math.cos(pitch); val sp = kotlin.math.sin(pitch)
+            val cr = kotlin.math.cos(eyeRoll); val sr = kotlin.math.sin(eyeRoll)
+            val x1 = p.x * cy + p.z * sy
+            val z1 = -p.x * sy + p.z * cy
+            val y1 = p.y * cp - z1 * sp
+            val z2 = p.y * sp + z1 * cp
+            val x2 = x1 * cr - y1 * sr
+            val y2 = x1 * sr + y1 * cr
+            val perspective = focalLength / (focalLength + z2).coerceAtLeast(focalLength * 0.45f)
+            return PointF(centerX + x2 * perspective, centerY + y2 * perspective)
         }
-        // Give each family a genuinely different silhouette instead of recolouring one rounded rectangle.
-        canvas.drawPath(lensPath(leftRect, selectedStyle, 0f), framePaint)
-        canvas.drawPath(lensPath(rightRect, selectedStyle, 0f), framePaint)
-        val inset = max(2f, lensHeight * 0.055f)
-        val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(165, 255, 255, 255)
-            style = Paint.Style.STROKE
-            strokeWidth = max(1f, lensHeight * 0.025f)
+
+        fun outline(cx: Float, cy: Float, z: Float, scale: Float = 1f): List<P3> {
+            val shape = selectedStyle.name.lowercase()
+            val points = ArrayList<P3>(48)
+            for (i in 0 until 48) {
+                val t = (2.0 * Math.PI * i / 48.0)
+                val c = kotlin.math.cos(t).toFloat()
+                val s = kotlin.math.sin(t).toFloat()
+                var nx = c
+                var ny = s
+                when {
+                    selectedStyle.round || shape.contains("round") || shape.contains("circle") -> {
+                        nx = c; ny = s
+                    }
+                    shape.contains("aviator") || shape.contains("pilot") -> {
+                        nx = c * (1f - 0.12f * s)
+                        ny = s * (if (s < 0f) 0.92f else 1.12f)
+                    }
+                    shape.contains("cat") -> {
+                        nx = c
+                        ny = s * (1f - 0.12f * c) - 0.06f * c
+                    }
+                    shape.contains("square") || shape.contains("sport") || shape.contains("classic") || shape.contains("black") -> {
+                        val exponent = 0.45f
+                        nx = kotlin.math.sign(c) * kotlin.math.abs(c).let { it.pow(exponent) }
+                        ny = kotlin.math.sign(s) * kotlin.math.abs(s).let { it.pow(exponent) }
+                    }
+                }
+                points.add(P3(cx + nx * lensWidth * 0.5f * scale, cy + ny * lensHeight * 0.5f * scale, z))
+            }
+            return points
         }
-        val glintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(if (selectedStyle.sunglasses) 105 else 55, 255, 255, 255)
+
+        fun path3(points: List<P3>, close: Boolean = true): android.graphics.Path {
+            val path = android.graphics.Path()
+            points.forEachIndexed { index, p ->
+                val q = project(p)
+                if (index == 0) path.moveTo(q.x, q.y) else path.lineTo(q.x, q.y)
+            }
+            if (close) path.close()
+            return path
+        }
+
+        val frameColor = selectedStyle.color
+        val sidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(210, (Color.red(frameColor) * 0.58f).toInt(), (Color.green(frameColor) * 0.58f).toInt(), (Color.blue(frameColor) * 0.58f).toInt())
             style = Paint.Style.STROKE
-            strokeWidth = max(1f, lensHeight * 0.035f)
+            strokeWidth = max(2f, eyeDistance * 0.035f)
             strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
         }
-        val innerLeft = RectF(leftRect.left + inset, leftRect.top + inset, leftRect.right - inset, leftRect.bottom - inset)
-        val innerRight = RectF(rightRect.left + inset, rightRect.top + inset, rightRect.right - inset, rightRect.bottom - inset)
-        canvas.drawPath(lensPath(innerLeft, selectedStyle, inset), innerPaint)
-        canvas.drawPath(lensPath(innerRight, selectedStyle, inset), innerPaint)
-        canvas.drawLine(leftRect.left + inset * 2, leftRect.top + inset, leftRect.left + lensWidth * 0.27f, leftRect.top + inset, glintPaint)
-        canvas.drawLine(rightRect.left + inset * 2, rightRect.top + inset, rightRect.left + lensWidth * 0.27f, rightRect.top + inset, glintPaint)
+        val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = frameColor
+            style = Paint.Style.STROKE
+            strokeWidth = if (selectedStyle.sunglasses) max(eyeDistance * 0.045f, 4f) else max(eyeDistance * 0.031f, 2.7f)
+            strokeJoin = Paint.Join.ROUND
+        }
+        val lensFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (selectedStyle.sunglasses) Color.argb(168, 25, 36, 52) else Color.argb(22, 150, 205, 220)
+            style = Paint.Style.FILL
+        }
+        val bevelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(155, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, eyeDistance * 0.009f)
+        }
+
+        val leftCx = -lensCenterOffset
+        val rightCx = lensCenterOffset
+        val lensY = 0f
+        // Draw the rear rim first, then the lens surface and the raised front rim.
+        for (cx in listOf(leftCx, rightCx)) {
+            val rear = outline(cx, lensY, -frameDepth)
+            val front = outline(cx, lensY, frameDepth)
+            val rearProjected = rear.map { project(it) }
+            val frontProjected = front.map { project(it) }
+            for (i in rear.indices step 3) {
+                val j = (i + 1) % rear.size
+                canvas.drawLine(rearProjected[i].x, rearProjected[i].y, frontProjected[i].x, frontProjected[i].y, sidePaint)
+            }
+            if (selectedStyle.sunglasses) canvas.drawPath(path3(outline(cx, lensY, frameDepth * 0.7f, 0.94f)), lensFill)
+            else canvas.drawPath(path3(outline(cx, lensY, frameDepth * 0.7f, 0.94f)), lensFill)
+            canvas.drawPath(path3(front), rimPaint)
+            canvas.drawPath(path3(outline(cx, lensY, frameDepth + 0.5f, 0.87f)), bevelPaint)
+        }
+
+        // Nose bridge is a shallow 3D arch, not a flat horizontal connector.
+        val bridge = listOf(
+            P3(-lensCenterOffset + lensWidth * 0.42f, -lensHeight * 0.02f, frameDepth),
+            P3(-eyeDistance * 0.12f, -lensHeight * 0.10f, frameDepth * 1.4f),
+            P3(eyeDistance * 0.12f, -lensHeight * 0.10f, frameDepth * 1.4f),
+            P3(lensCenterOffset - lensWidth * 0.42f, -lensHeight * 0.02f, frameDepth)
+        )
+        val bridgePath = android.graphics.Path()
+        bridge.forEachIndexed { index, p ->
+            val q = project(p)
+            if (index == 0) bridgePath.moveTo(q.x, q.y) else bridgePath.lineTo(q.x, q.y)
+        }
+        val bridgeStroke = Paint(rimPaint).apply { style = Paint.Style.STROKE; strokeWidth = max(eyeDistance * 0.035f, 3f); strokeCap = Paint.Cap.ROUND }
+        canvas.drawPath(bridgePath, bridgeStroke)
+
+        // Temple arms extend backwards in depth and project toward the ears.
+        val templeStartY = lensHeight * 0.02f
+        val templeEndZ = -eyeDistance * 0.72f
+        val templePaths = listOf(
+            listOf(P3(-lensCenterOffset - lensWidth * 0.48f, templeStartY, frameDepth), P3(-lensCenterOffset - lensWidth * 0.68f, templeStartY + lensHeight * 0.04f, -eyeDistance * 0.18f), P3(-lensCenterOffset - lensWidth * 0.82f, templeStartY + lensHeight * 0.10f, templeEndZ)),
+            listOf(P3(lensCenterOffset + lensWidth * 0.48f, templeStartY, frameDepth), P3(lensCenterOffset + lensWidth * 0.68f, templeStartY + lensHeight * 0.04f, -eyeDistance * 0.18f), P3(lensCenterOffset + lensWidth * 0.82f, templeStartY + lensHeight * 0.10f, templeEndZ))
+        )
+        templePaths.forEach { points ->
+            val projected = points.map { project(it) }
+            for (i in 0 until projected.size - 1) {
+                canvas.drawLine(projected[i].x, projected[i].y, projected[i + 1].x, projected[i + 1].y, bridgeStroke)
+            }
+        }
+
         if (selectedStyle.sunglasses) {
-            val reflection = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(36, 210, 235, 255); style = Paint.Style.FILL }
-            val shineLeft = RectF(leftRect.left + lensWidth * 0.12f, leftRect.top + lensHeight * 0.12f, leftRect.left + lensWidth * 0.36f, leftRect.bottom - lensHeight * 0.12f)
-            val shineRight = RectF(rightRect.left + lensWidth * 0.12f, rightRect.top + lensHeight * 0.12f, rightRect.left + lensWidth * 0.36f, rightRect.bottom - lensHeight * 0.12f)
-            canvas.drawRoundRect(shineLeft, corner, corner, reflection)
-            canvas.drawRoundRect(shineRight, corner, corner, reflection)
+            val shinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(48, 220, 240, 255)
+                style = Paint.Style.STROKE
+                strokeWidth = max(eyeDistance * 0.018f, 1.5f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            for (cx in listOf(leftCx, rightCx)) {
+                val a = project(P3(cx - lensWidth * 0.20f, -lensHeight * 0.28f, frameDepth * 0.8f))
+                val b = project(P3(cx - lensWidth * 0.02f, lensHeight * 0.18f, frameDepth * 0.8f))
+                canvas.drawLine(a.x, a.y, b.x, b.y, shinePaint)
+            }
         }
-        val bridgeY = (left.y + right.y) / 2f
-        canvas.drawLine(leftRect.right, bridgeY, rightRect.left, bridgeY, bridgePaint)
-        canvas.drawLine(leftRect.left, left.y, leftRect.left - lensHeight * 0.28f, left.y - lensHeight * 0.05f, bridgePaint)
-        canvas.drawLine(rightRect.right, right.y, rightRect.right + lensHeight * 0.28f, right.y - lensHeight * 0.05f, bridgePaint)
     }
+}
 }
