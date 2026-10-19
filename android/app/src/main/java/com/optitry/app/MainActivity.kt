@@ -9,6 +9,7 @@ import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Matrix
 import android.os.Bundle
+import android.provider.MediaStore
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var status: TextView
     private lateinit var glassesOverlay: GlassesOverlayView
+    private lateinit var cameraFrame: FrameLayout
     private var faceLandmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
     private var faceFound = false
@@ -102,7 +104,7 @@ class MainActivity : AppCompatActivity() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
         glassesOverlay = GlassesOverlayView(this)
-        val cameraFrame = FrameLayout(this).apply {
+        cameraFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(24, 24, 27))
             addView(previewView, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -143,6 +145,11 @@ class MainActivity : AppCompatActivity() {
         ))
         root.addView(status)
         root.addView(pick)
+        val saveButton = Button(this).apply {
+            text = "Save try-on photo"
+            setOnClickListener { saveTryOnPhoto() }
+        }
+        root.addView(saveButton)
         root.addView(categoryRow)
         root.addView(catalogPanel)
         setContentView(root)
@@ -151,6 +158,27 @@ class MainActivity : AppCompatActivity() {
             startCamera()
         } else {
             cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun saveTryOnPhoto() {
+        if (!faceFound) {
+            status.text = "Face not detected yet. Center your face before saving."
+            return
+        }
+        try {
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                cameraFrame.width, cameraFrame.height, android.graphics.Bitmap.Config.ARGB_8888
+            )
+            val canvas = Canvas(bitmap)
+            cameraFrame.draw(canvas)
+            val saved = MediaStore.Images.Media.insertImage(
+                contentResolver, bitmap, "OptiTry-${System.currentTimeMillis()}", "OptiTry virtual eyewear preview"
+            )
+            bitmap.recycle()
+            status.text = if (saved != null) "Try-on photo saved to Gallery." else "Could not save photo. Please try again."
+        } catch (e: Exception) {
+            status.text = "Could not save photo: ${e.localizedMessage ?: "unknown error"}"
         }
     }
 
