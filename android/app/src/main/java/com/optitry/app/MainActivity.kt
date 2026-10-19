@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraFrame: FrameLayout
     private lateinit var photoView: ImageView
     private var selectedPhotoBitmap: android.graphics.Bitmap? = null
+    @Volatile private var photoMode = false
     private var faceLandmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
     private var faceFound = false
@@ -154,6 +155,19 @@ class MainActivity : AppCompatActivity() {
         ))
         root.addView(status)
         root.addView(pick)
+        val liveCameraButton = Button(this).apply {
+            text = "Back to live camera"
+            setOnClickListener {
+                photoMode = false
+                glassesOverlay.setPhotoMode(false)
+                photoView.visibility = View.GONE
+                previewView.visibility = View.VISIBLE
+                glassesOverlay.updateLandmarks(null)
+                faceFound = false
+                status.text = "Live camera mode • look at the camera to preview frames."
+            }
+        }
+        root.addView(liveCameraButton)
         val saveButton = Button(this).apply {
             text = "Save try-on photo"
             setOnClickListener { saveTryOnPhoto() }
@@ -170,7 +184,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveTryOnPhoto() {
     private fun showPhotoTryOn(uri: android.net.Uri) {
         try {
             val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
@@ -184,6 +197,8 @@ class MainActivity : AppCompatActivity() {
             selectedPhotoBitmap?.recycle()
             selectedPhotoBitmap = bitmap
             photoView.setImageBitmap(bitmap)
+            photoMode = true
+            glassesOverlay.setPhotoMode(true, bitmap.width, bitmap.height)
             previewView.visibility = View.GONE
             photoView.visibility = View.VISIBLE
             status.text = "Photo loaded • detecting face for try-on…"
@@ -197,6 +212,7 @@ class MainActivity : AppCompatActivity() {
                     val face = result.faceLandmarks().firstOrNull()
                     detector.close()
                     runOnUiThread {
+                        if (!photoMode || selectedPhotoBitmap !== bitmap) return@runOnUiThread
                         if (face != null) {
                             glassesOverlay.updateLandmarks(face.map { PointF(it.x(), it.y()) })
                             faceFound = true
@@ -345,17 +361,19 @@ class MainActivity : AppCompatActivity() {
 
             val mpImage = BitmapImageBuilder(upright).build()
             try {
-                val result = faceLandmarker?.detectForVideo(mpImage, SystemClock.uptimeMillis())
+                val result = if (photoMode) null else faceLandmarker?.detectForVideo(mpImage, SystemClock.uptimeMillis())
                 val face = result?.faceLandmarks()?.firstOrNull()
                 if (face != null && face.size > 263) {
                     val points = face.map { PointF(it.x(), it.y()) }
                     runOnUiThread {
+                        if (photoMode) return@runOnUiThread
                         glassesOverlay.updateLandmarks(points)
                         if (!faceFound) status.text = "Face detected • Move your head to test live tracking."
                         faceFound = true
                     }
                 } else {
                     runOnUiThread {
+                        if (photoMode) return@runOnUiThread
                         glassesOverlay.updateLandmarks(null)
                         if (faceFound) status.text = "Face not detected. Center your face in the camera."
                         faceFound = false
@@ -397,6 +415,15 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         postInvalidate()
     }
     @Volatile private var landmarks: List<PointF>? = null
+    @Volatile private var photoMode = false
+    @Volatile private var photoBitmapWidth = 0
+    @Volatile private var photoBitmapHeight = 0
+    fun setPhotoMode(enabled: Boolean, bitmapWidth: Int = 0, bitmapHeight: Int = 0) {
+        photoMode = enabled
+        photoBitmapWidth = bitmapWidth
+        photoBitmapHeight = bitmapHeight
+        postInvalidate()
+    }
 
     fun updateLandmarks(points: List<PointF>?) {
         landmarks = points
@@ -410,8 +437,19 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
 
         // MediaPipe's eye corners: 33/133 and 362/263. Preview is mirrored for the front camera.
         fun point(index: Int): PointF {
-            val x = if (photoView.visibility == View.VISIBLE) face[index].x else 1f - face[index].x
-            return PointF(x * width, face[index].y * height)
+            if (photoMode) {
+                val bitmapWidth = photoBitmapWidth
+                val bitmapHeight = photoBitmapHeight
+                if (bitmapWidth > 0 && bitmapHeight > 0) {
+                    val scale = min(width.toFloat() / bitmapWidth, height.toFloat() / bitmapHeight)
+                    val shownWidth = bitmapWidth * scale
+                    val shownHeight = bitmapHeight * scale
+                    val offsetX = (width - shownWidth) / 2f
+                    val offsetY = (height - shownHeight) / 2f
+                    return PointF(offsetX + face[index].x * shownWidth, offsetY + face[index].y * shownHeight)
+                }
+            }
+            return PointF((1f - face[index].x) * width, face[index].y * height)
         }
         val leftEyeA = point(33)
         val leftEyeB = point(133)
