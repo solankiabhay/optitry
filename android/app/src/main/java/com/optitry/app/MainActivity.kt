@@ -24,7 +24,6 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.toBitmap
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -164,9 +163,41 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    // CameraX supplies YUV_420_888 frames; convert them without an extra imaging dependency.
+    private fun imageProxyToBitmap(proxy: ImageProxy): android.graphics.Bitmap {
+        val width = proxy.width
+        val height = proxy.height
+        val yPlane = proxy.planes[0]
+        val uPlane = proxy.planes[1]
+        val vPlane = proxy.planes[2]
+        val yBuffer = yPlane.buffer.duplicate()
+        val uBuffer = uPlane.buffer.duplicate()
+        val vBuffer = vPlane.buffer.duplicate()
+        val yRowStride = yPlane.rowStride
+        val uvRowStride = uPlane.rowStride
+        val uvPixelStride = uPlane.pixelStride
+        val pixels = IntArray(width * height)
+        var outputIndex = 0
+        for (row in 0 until height) {
+            val yRow = row * yRowStride
+            val uvRow = (row shr 1) * uvRowStride
+            for (col in 0 until width) {
+                val y = yBuffer.get(yRow + col).toInt() and 0xff
+                val uvIndex = uvRow + (col shr 1) * uvPixelStride
+                val u = (uBuffer.get(uvIndex).toInt() and 0xff) - 128
+                val v = (vBuffer.get(uvIndex).toInt() and 0xff) - 128
+                val r = (y + 1.370705f * v).toInt().coerceIn(0, 255)
+                val g = (y - 0.337633f * u - 0.698001f * v).toInt().coerceIn(0, 255)
+                val b = (y + 1.732446f * u).toInt().coerceIn(0, 255)
+                pixels[outputIndex++] = (0xff shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        return android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+    }
+
     private fun analyzeFrame(proxy: ImageProxy) {
         try {
-            val source = proxy.toBitmap()
+            val source = imageProxyToBitmap(proxy)
             val rotation = Matrix().apply { postRotate(proxy.imageInfo.rotationDegrees.toFloat()) }
             val upright = if (proxy.imageInfo.rotationDegrees == 0) source else
                 android.graphics.Bitmap.createBitmap(source, 0, 0, source.width, source.height, rotation, true)
