@@ -541,12 +541,18 @@ private class GlassesOverlayView(context: android.content.Context) : View(contex
         // nose-to-eye vertical offset estimates pitch, and the eye line gives roll.
         val yaw = (((nose.x - centerX) / eyeDistance) * 1.65f).coerceIn(-0.78f, 0.78f)
         val pitch = ((((nose.y - centerY) / eyeDistance) - 0.17f) * 1.25f).coerceIn(-0.42f, 0.42f)
-        val lensWidth = eyeDistance * 0.74f
-        // Typical eyewear lenses are taller than the previous short, goggle-like silhouette.
-        val lensHeight = max(eyeDistance * 0.54f, 18f)
-        val lensCenterOffset = eyeDistance * 0.54f
-        val frameDepth = max(eyeDistance * 0.055f, 2.5f)
-        val focalLength = eyeDistance * 3.8f
+        // Estimate the temple-to-temple span from face mesh landmarks and size the
+        // frame to the face, while clamping bad/partial detections to a safe range.
+        val templeSpan = abs(point(356).x - point(127).x)
+            .coerceIn(eyeDistance * 1.85f, eyeDistance * 2.85f)
+        val targetOuterWidth = templeSpan * 0.84f
+        val lensGap = eyeDistance * 0.16f
+        val lensWidth = max((targetOuterWidth - lensGap) * 0.5f, eyeDistance * 0.72f)
+        // Slightly taller lenses and a measured bridge gap look less like goggles.
+        val lensHeight = max(eyeDistance * 0.57f, 18f)
+        val lensCenterOffset = lensGap * 0.5f + lensWidth * 0.5f
+        val frameDepth = max(eyeDistance * 0.052f, 2.3f)
+        val focalLength = eyeDistance * 4.2f
 
         data class P3(val x: Float, val y: Float, val z: Float)
         fun project(p: P3): PointF {
