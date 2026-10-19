@@ -39,6 +39,7 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
