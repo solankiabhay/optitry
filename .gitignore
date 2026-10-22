@@ -6,3 +6,4 @@ local.properties
 __pycache__/
 .venv/
 .env
+android/app/src/main/assets/face_landmarker.task

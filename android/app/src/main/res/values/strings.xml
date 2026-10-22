@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">OptiTry</string>
+    <string name="eyeglasses">Eyeglasses</string>
+    <string name="sunglasses">Sunglasses</string>
+    <string name="rim_metal">Metal</string>
+    <string name="rim_acetate">Acetate</string>
+    <string name="perm_title">Camera access needed</string>
+    <string name="perm_message">OptiTry uses your front camera to show how frames look on your face. Video stays on your phone and is never uploaded.</string>
+    <string name="perm_grant">Allow camera</string>
+    <string name="perm_denied_title">Camera permission is off</string>
+    <string name="perm_denied_message">Allow the camera to try frames live, or pick a photo of yourself instead.</string>
+    <string name="open_settings">Open settings</string>
+    <string name="use_photo">Try with a photo instead</string>
+    <string name="choose_another">Choose another photo</string>
+    <string name="loading_camera">Starting camera…</string>
+    <string name="loading_photo">Analysing photo…</string>
+    <string name="loading_hint">Loading the face model. This takes a moment the first time.</string>
+    <string name="error_title">Something went wrong</string>
+    <string name="error_model">The face model could not be loaded (%1$s).</string>
+    <string name="error_no_frames">The camera did not deliver any frames. Close other apps that use the camera and try again.</string>
+    <string name="error_photo">That photo could not be used (%1$s).</string>
+    <string name="retry">Try again</string>
+    <string name="chip_searching">Looking for your face…</string>
+    <string name="chip_tracking">Face tracked</string>
+    <string name="chip_photo_ok">Photo mode</string>
+    <string name="chip_photo_no_face">No face found. Try a front-facing photo</string>
+    <string name="saved_ok">Saved to Pictures/OptiTry</string>
+    <string name="save_failed">Could not save the photo</string>
+    <string name="cd_gallery">Choose a photo</string>
+    <string name="cd_capture">Take photo</string>
+    <string name="cd_live">Back to live camera</string>
+</resources>

@@ -1,700 +1,588 @@
 package com.optitry.app
 
 import android.Manifest
+import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.PointF
-import android.graphics.RectF
+import android.graphics.ImageDecoder
 import android.graphics.Matrix
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
-import android.os.SystemClock
+import android.provider.Settings
+import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import com.google.mediapipe.framework.image.BitmapImageBuilder
-import com.google.mediapipe.tasks.core.BaseOptions
-import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.exifinterface.media.ExifInterface
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.optitry.app.camera.CameraController
+import com.optitry.app.eyewear.Category
+import com.optitry.app.eyewear.FrameCatalog
+import com.optitry.app.eyewear.FrameSpec
+import com.optitry.app.render.GlassesRenderer
+import com.optitry.app.render.TryOnGlView
+import com.optitry.app.tracking.FaceTracker
+import com.optitry.app.ui.FrameAdapter
+import java.io.OutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
+import kotlin.math.roundToInt
 
-class MainActivity : AppCompatActivity() {
-    private lateinit var previewView: PreviewView
-    private lateinit var status: TextView
-    private lateinit var glassesOverlay: GlassesOverlayView
-    private lateinit var cameraFrame: FrameLayout
-    private lateinit var photoView: ImageView
-    private var selectedPhotoBitmap: android.graphics.Bitmap? = null
-    @Volatile private var photoMode = false
-    private var faceLandmarker: FaceLandmarker? = null
-    private var cameraExecutor: ExecutorService? = null
-    private var faceFound = false
-    private var sunglassesMode = false
-    internal data class FrameStyle(val name: String, val color: Int, val sunglasses: Boolean, val round: Boolean)
-    private val opticalStyles = listOf(
-        FrameStyle("Classic Black", Color.rgb(35,35,39), false, false), FrameStyle("Crystal Clear", Color.rgb(160,210,218), false, true),
-        FrameStyle("Tortoise", Color.rgb(145,83,42), false, false), FrameStyle("Silver Metal", Color.rgb(190,198,205), false, true),
-        FrameStyle("Rose Gold", Color.rgb(205,135,125), false, true), FrameStyle("Navy Blue", Color.rgb(40,80,140), false, false),
-        FrameStyle("Forest Green", Color.rgb(42,112,83), false, true), FrameStyle("Burgundy", Color.rgb(120,35,60), false, false),
-        FrameStyle("Matte Grey", Color.rgb(100,105,115), false, false), FrameStyle("Champagne", Color.rgb(190,160,110), false, true),
-        FrameStyle("Retro Round", Color.rgb(65,65,70), false, true), FrameStyle("Bold Square", Color.rgb(25,25,28), false, false),
-        FrameStyle("Slim Gold", Color.rgb(205,170,90), false, true), FrameStyle("Transparent Blue", Color.rgb(95,165,205), false, false),
-        FrameStyle("Olive", Color.rgb(105,115,60), false, false), FrameStyle("Plum", Color.rgb(105,60,110), false, true),
-        FrameStyle("Copper", Color.rgb(170,105,70), false, false), FrameStyle("White Frame", Color.rgb(225,225,220), false, false),
-        FrameStyle("Teal", Color.rgb(35,135,140), false, true), FrameStyle("Aviator Optical", Color.rgb(185,150,85), false, true)
-    )
-    private val sunStyles = listOf(
-        FrameStyle("Black Classic", Color.rgb(25,25,28), true, false), FrameStyle("Aviator Gold", Color.rgb(200,165,85), true, true),
-        FrameStyle("Tortoise Sun", Color.rgb(125,70,35), true, false), FrameStyle("Silver Mirror", Color.rgb(175,190,205), true, true),
-        FrameStyle("Rose Tint", Color.rgb(190,105,125), true, true), FrameStyle("Ocean Blue", Color.rgb(35,100,175), true, false),
-        FrameStyle("Emerald", Color.rgb(35,120,85), true, true), FrameStyle("Burgundy Sun", Color.rgb(105,30,50), true, false),
-        FrameStyle("Smoke Grey", Color.rgb(90,95,105), true, false), FrameStyle("Champagne Sun", Color.rgb(185,150,95), true, true),
-        FrameStyle("Round Retro", Color.rgb(40,40,45), true, true), FrameStyle("Sport Square", Color.rgb(20,20,25), true, false),
-        FrameStyle("Gold Wire", Color.rgb(205,170,95), true, true), FrameStyle("Ice Blue", Color.rgb(100,170,210), true, false),
-        FrameStyle("Olive Pilot", Color.rgb(100,110,55), true, false), FrameStyle("Plum Fade", Color.rgb(100,55,105), true, true),
-        FrameStyle("Copper Lens", Color.rgb(165,95,60), true, false), FrameStyle("White Sport", Color.rgb(220,220,215), true, false),
-        FrameStyle("Teal Mirror", Color.rgb(30,130,135), true, true), FrameStyle("Retro Cat Eye", Color.rgb(30,30,35), true, false)
-    )
+class MainActivity : AppCompatActivity(), CameraController.Listener {
 
-    private val imagePicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) showPhotoTryOn(uri)
-    }
+    private enum class Mode { LIVE, PHOTO }
+
+    private val main = Handler(Looper.getMainLooper())
+    private val io: ExecutorService = Executors.newSingleThreadExecutor()
+
+    private lateinit var renderer: GlassesRenderer
+    private lateinit var glView: TryOnGlView
+    private lateinit var tracker: FaceTracker
+    private lateinit var camera: CameraController
+
+    private lateinit var root: FrameLayout
+    private lateinit var topBar: LinearLayout
+    private lateinit var chip: TextView
+    private lateinit var panel: LinearLayout
+    private lateinit var nameView: TextView
+    private lateinit var subView: TextView
+    private lateinit var tabEyeglasses: TextView
+    private lateinit var tabSunglasses: TextView
+    private lateinit var list: RecyclerView
+    private lateinit var adapter: FrameAdapter
+    private lateinit var backToLive: FrameLayout
+    private lateinit var overlay: FrameLayout
+    private lateinit var overlaySpinner: ProgressBar
+    private lateinit var overlayTitle: TextView
+    private lateinit var overlayMessage: TextView
+    private lateinit var overlayPrimary: Button
+    private lateinit var overlaySecondary: Button
+
+    private var mode = Mode.LIVE
+    private var category = Category.EYEGLASSES
+    private val selection = HashMap<Category, FrameSpec>()
+    private var selected: FrameSpec = FrameCatalog.eyeglasses.first()
+    private var pendingSave: Bitmap? = null
+    private var firstFrameTimeout: Runnable? = null
+
+    // ---- activity-result launchers -------------------------------------------------------------------
+
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera() else status.text = "Camera permission is required for live try-on."
+        if (granted) startLive() else showPermissionNeeded()
     }
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val bmp = pendingSave
+        pendingSave = null
+        if (granted && bmp != null) saveBitmapAsync(bmp) else toast(getString(R.string.save_failed))
+    }
+    private val pickPhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) enterPhotoMode(uri)
+    }
+
+    // ---- lifecycle -------------------------------------------------------------------------------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.rgb(9, 9, 11)
-        window.navigationBarColor = Color.rgb(9, 9, 11)
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(9, 9, 11))
-            setPadding(18, 12, 18, 14)
-        }
-        val heading = TextView(this).apply {
-            text = "OptiTry  •  LIVE VIRTUAL EYEWEAR"
-            textSize = 19f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(4, 10, 4, 12)
-        }
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FRAME, null)
+        FrameCatalog.all.firstOrNull { it.id == saved }?.let { selected = it; category = it.category }
+        selection[Category.EYEGLASSES] = if (selected.category == Category.EYEGLASSES) selected else FrameCatalog.eyeglasses.first()
+        selection[Category.SUNGLASSES] = if (selected.category == Category.SUNGLASSES) selected else FrameCatalog.sunglasses.first()
 
-        previewView = PreviewView(this).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-        glassesOverlay = GlassesOverlayView(this)
-        photoView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            visibility = View.GONE
-            setBackgroundColor(Color.rgb(24, 24, 27))
-        }
-        cameraFrame = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(24, 24, 27))
-            addView(photoView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(previewView, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-            ))
-            addView(glassesOverlay, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-            ))
-        }
-        status = TextView(this).apply {
-            text = "Starting front camera and face tracking…"
-            textSize = 13f
-            setTextColor(Color.rgb(212, 212, 216))
-            setPadding(4, 10, 4, 10)
-        }
-        val pick = Button(this).apply {
-            text = "＋  Try on your photo"
-            setOnClickListener {
-                imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }
-        }
-        val categoryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        val catalogPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val opticalButton = Button(this).apply {
-            text = "Eyeglasses (20)"
-            setOnClickListener { sunglassesMode = false; renderCatalog(catalogPanel) }
-        }
-        val sunButton = Button(this).apply {
-            text = "Sunglasses (20)"
-            setOnClickListener { sunglassesMode = true; renderCatalog(catalogPanel) }
-        }
-        categoryRow.addView(opticalButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        categoryRow.addView(sunButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        renderCatalog(catalogPanel)
+        renderer = GlassesRenderer(applicationContext) { msg -> main.post { showError(msg, retry = false) } }
+        glView = TryOnGlView(this, renderer)
+        tracker = FaceTracker(applicationContext)
+        camera = CameraController(this, renderer, tracker, this)
 
-        root.addView(heading)
-        root.addView(cameraFrame, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-        ))
-        root.addView(status)
-        root.addView(pick)
-        val liveCameraButton = Button(this).apply {
-            text = "Back to live camera"
-            setOnClickListener {
-                photoMode = false
-                glassesOverlay.setPhotoMode(false)
-                photoView.visibility = View.GONE
-                previewView.visibility = View.VISIBLE
-                glassesOverlay.updateLandmarks(null)
-                faceFound = false
-                status.text = "Live camera mode • look at the camera to preview frames."
-            }
-        }
-        root.addView(liveCameraButton)
-        val saveButton = Button(this).apply {
-            text = "Save try-on photo"
-            setOnClickListener { saveTryOnPhoto() }
-        }
-        root.addView(saveButton)
-        root.addView(categoryRow)
-        root.addView(catalogPanel)
+        buildUi()
         setContentView(root)
+        renderer.setSpec(selected)
+        refreshPanel()
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCamera()
-        } else {
-            cameraPermission.launch(Manifest.permission.CAMERA)
-        }
+        if (hasCameraPermission()) startLive() else showPermissionIntro()
     }
 
-    private fun showPhotoTryOn(uri: android.net.Uri) {
-        try {
-            val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
-                val source = android.graphics.ImageDecoder.createSource(contentResolver, uri)
-                android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ -> decoder.isMutableRequired = true }
-                    .copy(android.graphics.Bitmap.Config.ARGB_8888, true)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaStore.Images.Media.getBitmap(contentResolver, uri).copy(android.graphics.Bitmap.Config.ARGB_8888, true)
-            }
-            selectedPhotoBitmap?.recycle()
-            selectedPhotoBitmap = bitmap
-            photoView.setImageBitmap(bitmap)
-            photoMode = true
-            glassesOverlay.setPhotoMode(true, bitmap.width, bitmap.height)
-            previewView.visibility = View.GONE
-            photoView.visibility = View.VISIBLE
-            status.text = "Photo loaded • detecting face for try-on…"
-            Thread {
-                try {
-                    val options = FaceLandmarker.FaceLandmarkerOptions.builder()
-                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
-                        .setRunningMode(RunningMode.IMAGE).setNumFaces(1).build()
-                    val detector = FaceLandmarker.createFromOptions(this, options)
-                    val result = detector.detect(BitmapImageBuilder(bitmap).build())
-                    val face = result.faceLandmarks().firstOrNull()
-                    detector.close()
-                    runOnUiThread {
-                        if (!photoMode || selectedPhotoBitmap !== bitmap) return@runOnUiThread
-                        if (face != null) {
-                            glassesOverlay.updateLandmarks(face.map { PointF(it.x(), it.y()) })
-                            faceFound = true
-                            status.text = "Photo face detected • choose a frame and save your try-on."
-                        } else {
-                            glassesOverlay.updateLandmarks(null)
-                            faceFound = false
-                            status.text = "No face found. Try a clear, front-facing portrait."
-                        }
-                    }
-                } catch (e: Exception) { runOnUiThread { status.text = "Photo face detection failed: ${e.localizedMessage ?: "try another photo"}" } }
-            }.start()
-        } catch (e: Exception) { status.text = "Could not open photo: ${e.localizedMessage ?: "unsupported image"}" }
+    override fun onResume() {
+        super.onResume()
+        glView.onResume()
+        if (mode == Mode.LIVE && hasCameraPermission() && overlay.visibility != View.VISIBLE) camera.start()
     }
 
-    private fun saveTryOnPhoto() {
-        if (!faceFound) {
-            status.text = "Face not detected yet. Center your face before saving."
-            return
-        }
-        try {
-            val bitmap = android.graphics.Bitmap.createBitmap(
-                cameraFrame.width, cameraFrame.height, android.graphics.Bitmap.Config.ARGB_8888
-            )
-            val canvas = Canvas(bitmap)
-            cameraFrame.draw(canvas)
-            val saved = MediaStore.Images.Media.insertImage(
-                contentResolver, bitmap, "OptiTry-${System.currentTimeMillis()}", "OptiTry virtual eyewear preview"
-            )
-            bitmap.recycle()
-            status.text = if (saved != null) "Try-on photo saved to Gallery." else "Could not save photo. Please try again."
-        } catch (e: Exception) {
-            status.text = "Could not save photo: ${e.localizedMessage ?: "unknown error"}"
-        }
-    }
-
-    private fun renderCatalog(panel: LinearLayout) {
-        panel.removeAllViews()
-        panel.addView(TextView(this).apply {
-            text = if (sunglassesMode) "SUNGLASSES • Choose a style" else "EYEGLASSES • Choose a style"
-            textSize = 12f
-            setTextColor(Color.rgb(165,243,252))
-            setPadding(4,4,4,4)
-        })
-        val scroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val items = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val styles = if (sunglassesMode) sunStyles else opticalStyles
-        styles.forEachIndexed { index, style ->
-            val item = Button(this).apply {
-                text = "%02d  %s".format(index + 1, style.name)
-                textSize = 11f
-                setOnClickListener {
-                    glassesOverlay.setFrameStyle(style)
-                    status.text = style.name + " selected • Look at the camera to preview the frame."
-                }
-            }
-            items.addView(item, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = 6 })
-        }
-        scroll.addView(items)
-        panel.addView(scroll)
-    }
-
-    private fun startCamera() {
-        try {
-            val baseOptions = BaseOptions.builder()
-                .setModelAssetPath("face_landmarker.task")
-                .build()
-            val options = FaceLandmarker.FaceLandmarkerOptions.builder()
-                .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.VIDEO)
-                .setNumFaces(1)
-                .build()
-            faceLandmarker?.close()
-            faceLandmarker = FaceLandmarker.createFromOptions(this, options)
-        } catch (e: Exception) {
-            status.text = "Face model could not start: ${e.localizedMessage ?: "unknown error"}"
-            return
-        }
-
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener({
-            val provider = providerFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            cameraExecutor?.shutdown()
-            cameraExecutor = Executors.newSingleThreadExecutor()
-            analysis.setAnalyzer(cameraExecutor!!) { proxy -> analyzeFrame(proxy) }
-
-            try {
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_FRONT_CAMERA,
-                    preview,
-                    analysis
-                )
-                status.text = "Look at the camera. Glasses overlay follows your eye landmarks."
-            } catch (e: Exception) {
-                status.text = "Unable to start camera: ${e.localizedMessage ?: "unknown error"}"
-            }
-        }, ContextCompat.getMainExecutor(this))
-    }
-
-    // CameraX supplies YUV_420_888 frames; convert them without an extra imaging dependency.
-    private fun imageProxyToBitmap(proxy: ImageProxy): android.graphics.Bitmap {
-        val width = proxy.width
-        val height = proxy.height
-        val yPlane = proxy.planes[0]
-        val uPlane = proxy.planes[1]
-        val vPlane = proxy.planes[2]
-        val yBuffer = yPlane.buffer.duplicate()
-        val uBuffer = uPlane.buffer.duplicate()
-        val vBuffer = vPlane.buffer.duplicate()
-        val yRowStride = yPlane.rowStride
-        val uvRowStride = uPlane.rowStride
-        val uvPixelStride = uPlane.pixelStride
-        val pixels = IntArray(width * height)
-        var outputIndex = 0
-        for (row in 0 until height) {
-            val yRow = row * yRowStride
-            val uvRow = (row shr 1) * uvRowStride
-            for (col in 0 until width) {
-                val y = yBuffer.get(yRow + col).toInt() and 0xff
-                val uvIndex = uvRow + (col shr 1) * uvPixelStride
-                val u = (uBuffer.get(uvIndex).toInt() and 0xff) - 128
-                val v = (vBuffer.get(uvIndex).toInt() and 0xff) - 128
-                val r = (y + 1.370705f * v).toInt().coerceIn(0, 255)
-                val g = (y - 0.337633f * u - 0.698001f * v).toInt().coerceIn(0, 255)
-                val b = (y + 1.732446f * u).toInt().coerceIn(0, 255)
-                pixels[outputIndex++] = (0xff shl 24) or (r shl 16) or (g shl 8) or b
-            }
-        }
-        return android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
-    }
-
-    private fun analyzeFrame(proxy: ImageProxy) {
-        try {
-            val source = imageProxyToBitmap(proxy)
-            val rotation = Matrix().apply { postRotate(proxy.imageInfo.rotationDegrees.toFloat()) }
-            val upright = if (proxy.imageInfo.rotationDegrees == 0) source else
-                android.graphics.Bitmap.createBitmap(source, 0, 0, source.width, source.height, rotation, true)
-
-            val mpImage = BitmapImageBuilder(upright).build()
-            try {
-                val result = if (photoMode) null else faceLandmarker?.detectForVideo(mpImage, SystemClock.uptimeMillis())
-                val face = result?.faceLandmarks()?.firstOrNull()
-                if (face != null && face.size > 263) {
-                    val points = face.map { PointF(it.x(), it.y()) }
-                    runOnUiThread {
-                        if (photoMode) return@runOnUiThread
-                        glassesOverlay.updateLandmarks(points, upright.width, upright.height)
-                        if (!faceFound) status.text = "Face detected • Move your head to test live tracking."
-                        faceFound = true
-                    }
-                } else {
-                    runOnUiThread {
-                        if (photoMode) return@runOnUiThread
-                        glassesOverlay.updateLandmarks(null)
-                        if (faceFound) status.text = "Face not detected. Center your face in the camera."
-                        faceFound = false
-                    }
-                }
-            } finally {
-                mpImage.close()
-                if (upright !== source) upright.recycle()
-                source.recycle()
-            }
-        } catch (_: Exception) {
-            // A single dropped camera frame should not stop the live preview.
-        } finally {
-            proxy.close()
-        }
+    override fun onPause() {
+        camera.stop()
+        glView.onPause()
+        super.onPause()
     }
 
     override fun onDestroy() {
-        cameraExecutor?.shutdown()
-        selectedPhotoBitmap?.recycle()
-        faceLandmarker?.close()
-        faceLandmarker = null
+        firstFrameTimeout?.let { main.removeCallbacks(it) }
+        camera.release()
+        io.execute { tracker.close() }
+        io.shutdown()
         super.onDestroy()
     }
-}
 
-private class GlassesOverlayView(context: android.content.Context) : View(context) {
-    private var selectedStyle = MainActivity.FrameStyle("Classic Black", Color.rgb(35,35,39), false, false)
-    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = selectedStyle.color; style = Paint.Style.STROKE; strokeWidth = 5f }
-    private val lensPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(24,150,190,210); style = Paint.Style.FILL }
-    private val bridgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = selectedStyle.color; style = Paint.Style.STROKE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND }
-
-    fun setFrameStyle(style: MainActivity.FrameStyle) {
-        selectedStyle = style
-        framePaint.color = style.color
-        bridgePaint.color = style.color
-        lensPaint.color = if (style.sunglasses) Color.argb(145,24,34,48) else Color.argb(24,150,190,210)
-        framePaint.strokeWidth = if (style.sunglasses) 7f else 5f
-        postInvalidate()
-    }
-    @Volatile private var landmarks: List<PointF>? = null
-    @Volatile private var photoMode = false
-    @Volatile private var photoBitmapWidth = 0
-    @Volatile private var photoBitmapHeight = 0
-    @Volatile private var cameraImageWidth = 0
-    @Volatile private var cameraImageHeight = 0
-    private var smoothedLandmarks: List<PointF>? = null
-    fun setPhotoMode(enabled: Boolean, bitmapWidth: Int = 0, bitmapHeight: Int = 0) {
-        photoMode = enabled
-        photoBitmapWidth = bitmapWidth
-        photoBitmapHeight = bitmapHeight
-        postInvalidate()
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        camera.updateRotation()
+        applyPanelWidth()
+        glView.requestRender()
     }
 
-    fun updateLandmarks(points: List<PointF>?, imageWidth: Int = 0, imageHeight: Int = 0) {
-        if (imageWidth > 0 && imageHeight > 0) {
-            cameraImageWidth = imageWidth
-            cameraImageHeight = imageHeight
-        }
-        // Smooth small frame-to-frame detector noise so the glasses do not visibly jitter.
-        if (points == null) {
-            smoothedLandmarks = null
-            landmarks = null
-        } else if (photoMode || smoothedLandmarks == null || smoothedLandmarks!!.size != points.size) {
-            smoothedLandmarks = points.map { PointF(it.x, it.y) }
-            landmarks = smoothedLandmarks
-        } else {
-            val previous = smoothedLandmarks!!
-            val alpha = if (photoMode) 1f else 0.38f
-            val smooth = points.mapIndexed { index, p ->
-                PointF(previous[index].x + (p.x - previous[index].x) * alpha,
-                       previous[index].y + (p.y - previous[index].y) * alpha)
-            }
-            smoothedLandmarks = smooth
-            landmarks = smooth
-        }
-        postInvalidate()
+    // ---- flow ----------------------------------------------------------------------------------------------
+
+    private fun hasCameraPermission() =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun showPermissionIntro() {
+        panel.visibility = View.GONE
+        topBar.visibility = View.GONE
+        showOverlay(
+            getString(R.string.perm_title), getString(R.string.perm_message), spinner = false,
+            primary = getString(R.string.perm_grant) to { cameraPermission.launch(Manifest.permission.CAMERA) },
+            secondary = getString(R.string.use_photo) to { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        )
     }
 
-    private fun lensPath(rect: RectF, style: MainActivity.FrameStyle, inset: Float): android.graphics.Path {
-        val r = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
-        val path = android.graphics.Path()
-        val shape = style.name.lowercase()
-        when {
-            style.round || shape.contains("round") || shape.contains("circle") -> {
-                path.addOval(r, android.graphics.Path.Direction.CW)
+    private fun showPermissionNeeded() {
+        val blocked = !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+        showOverlay(
+            getString(R.string.perm_denied_title), getString(R.string.perm_denied_message), spinner = false,
+            primary = if (blocked)
+                getString(R.string.open_settings) to {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+                }
+            else getString(R.string.perm_grant) to { cameraPermission.launch(Manifest.permission.CAMERA) },
+            secondary = getString(R.string.use_photo) to { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        )
+    }
+
+    private fun startLive() {
+        mode = Mode.LIVE
+        showLoading(getString(R.string.loading_camera))
+        backToLive.visibility = View.INVISIBLE
+        io.execute {
+            try {
+                tracker.prepareVideo()
+            } catch (e: Throwable) {
+                Log.e(TAG, "face model failed", e)
+                main.post { showError(getString(R.string.error_model, e.message ?: e.javaClass.simpleName), retry = true) }
+                return@execute
             }
-            shape.contains("aviator") || shape.contains("pilot") -> {
-                path.moveTo(r.left + r.width() * 0.08f, r.top + r.height() * 0.08f)
-                path.quadTo(r.centerX(), r.top - r.height() * 0.02f, r.right - r.width() * 0.08f, r.top + r.height() * 0.08f)
-                path.lineTo(r.right, r.top + r.height() * 0.48f)
-                path.quadTo(r.centerX(), r.bottom + r.height() * 0.12f, r.left, r.top + r.height() * 0.48f)
-                path.close()
-            }
-            shape.contains("cat") -> {
-                path.moveTo(r.left, r.top + r.height() * 0.12f)
-                path.lineTo(r.left + r.width() * 0.28f, r.top + r.height() * 0.02f)
-                path.quadTo(r.centerX(), r.top + r.height() * 0.12f, r.right, r.top - r.height() * 0.02f)
-                path.lineTo(r.right - r.width() * 0.06f, r.bottom - r.height() * 0.18f)
-                path.quadTo(r.centerX(), r.bottom + r.height() * 0.04f, r.left + r.width() * 0.08f, r.bottom - r.height() * 0.12f)
-                path.close()
-            }
-            shape.contains("sport") || shape.contains("square") || shape.contains("classic") || shape.contains("black") -> {
-                val radius = min(r.width() * 0.12f, r.height() * 0.16f)
-                path.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW)
-            }
-            else -> {
-                val radius = min(r.width() * 0.24f, r.height() * 0.28f)
-                path.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW)
+            main.post {
+                renderer.clearFrame()
+                camera.start()
+                firstFrameTimeout?.let { main.removeCallbacks(it) }
+                firstFrameTimeout = Runnable { showError(getString(R.string.error_no_frames), retry = true) }
+                main.postDelayed(firstFrameTimeout!!, 12_000L)
             }
         }
-        return path
     }
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val face = landmarks ?: return
-        if (face.size <= 362) return
+    override fun onFirstFrame() {
+        firstFrameTimeout?.let { main.removeCallbacks(it) }
+        if (mode != Mode.LIVE) return
+        hideOverlay()
+        setChip(getString(R.string.chip_searching), false)
+    }
 
-        fun point(index: Int): PointF {
-            if (photoMode) {
-                val bitmapWidth = photoBitmapWidth
-                val bitmapHeight = photoBitmapHeight
-                if (bitmapWidth > 0 && bitmapHeight > 0) {
-                    val scale = min(width.toFloat() / bitmapWidth, height.toFloat() / bitmapHeight)
-                    val shownWidth = bitmapWidth * scale
-                    val shownHeight = bitmapHeight * scale
-                    val offsetX = (width - shownWidth) / 2f
-                    val offsetY = (height - shownHeight) / 2f
-                    return PointF(offsetX + face[index].x * shownWidth, offsetY + face[index].y * shownHeight)
+    override fun onFaceStateChanged(found: Boolean) {
+        if (mode != Mode.LIVE) return
+        setChip(getString(if (found) R.string.chip_tracking else R.string.chip_searching), found)
+    }
+
+    override fun onCameraError(message: String) {
+        firstFrameTimeout?.let { main.removeCallbacks(it) }
+        showError(message, retry = true)
+    }
+
+    private fun enterPhotoMode(uri: Uri) {
+        camera.stop()
+        firstFrameTimeout?.let { main.removeCallbacks(it) }
+        mode = Mode.PHOTO
+        showLoading(getString(R.string.loading_photo))
+        io.execute {
+            try {
+                tracker.prepareStill()
+                val bmp = decodePhoto(uri)
+                val pose = tracker.detectStill(bmp)
+                val slot = renderer.ring.obtain(bmp.width, bmp.height)
+                Canvas(slot.bitmap!!).drawBitmap(bmp, 0f, 0f, null)
+                slot.pose = pose
+                slot.mirror = false
+                slot.ambient = CameraController.estimateAmbient(bmp)
+                renderer.ring.publish(slot)
+                renderer.requestRender()
+                bmp.recycle()
+                main.post {
+                    hideOverlay()
+                    backToLive.visibility = View.VISIBLE
+                    setChip(getString(if (pose != null) R.string.chip_photo_ok else R.string.chip_photo_no_face), pose != null)
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "photo failed", e)
+                main.post { showError(getString(R.string.error_photo, e.message ?: e.javaClass.simpleName), retry = false, photo = true) }
+            }
+        }
+    }
+
+    private fun decodePhoto(uri: Uri): Bitmap {
+        if (Build.VERSION.SDK_INT >= 28) {
+            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(contentResolver, uri)) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val longest = max(info.size.width, info.size.height)
+                if (longest > MAX_PHOTO_SIDE) {
+                    val f = MAX_PHOTO_SIDE.toFloat() / longest
+                    decoder.setTargetSize(max(1, (info.size.width * f).roundToInt()), max(1, (info.size.height * f).roundToInt()))
                 }
             }
-            // Match PreviewView's FILL_CENTER crop; the analyzer image and visible camera
-            // preview do not always have the same aspect ratio.
-            val imageWidth = cameraImageWidth
-            val imageHeight = cameraImageHeight
-            if (imageWidth > 0 && imageHeight > 0) {
-                val scale = max(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
-                val shownWidth = imageWidth * scale
-                val shownHeight = imageHeight * scale
-                val offsetX = (width - shownWidth) / 2f
-                val offsetY = (height - shownHeight) / 2f
-                return PointF(offsetX + (1f - face[index].x) * shownWidth, offsetY + face[index].y * shownHeight)
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / sample > MAX_PHOTO_SIDE) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val decoded = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            ?: throw IllegalStateException("Could not read the selected photo")
+        val orientation = contentResolver.openInputStream(uri)?.use {
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } ?: ExifInterface.ORIENTATION_NORMAL
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        if (degrees == 0f) return decoded
+        val m = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
+    }
+
+    private fun capture() {
+        renderer.capture { bmp ->
+            if (bmp == null) { toast(getString(R.string.save_failed)); return@capture }
+            if (Build.VERSION.SDK_INT < 29 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+            ) {
+                main.post { pendingSave = bmp; storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
+            } else {
+                saveBitmapAsync(bmp)
             }
-            return PointF((1f - face[index].x) * width, face[index].y * height)
         }
+    }
 
-        val eyeA = point(33)
-        val eyeB = point(133)
-        val eyeC = point(362)
-        val eyeD = point(263)
-        val centerA = PointF((eyeA.x + eyeB.x) / 2f, (eyeA.y + eyeB.y) / 2f)
-        val centerB = PointF((eyeC.x + eyeD.x) / 2f, (eyeC.y + eyeD.y) / 2f)
-        val left = if (centerA.x < centerB.x) centerA else centerB
-        val right = if (centerA.x < centerB.x) centerB else centerA
-        val eyeDistance = abs(right.x - left.x)
-        if (eyeDistance < 12f) return
-
-        val centerX = (left.x + right.x) / 2f
-        val centerY = (left.y + right.y) / 2f
-        val eyeRoll = kotlin.math.atan2((right.y - left.y).toDouble(), (right.x - left.x).toDouble()).toFloat()
-        val nose = point(1.coerceAtMost(face.lastIndex))
-        // Approximate head pose from stable facial landmarks: nose offset estimates yaw,
-        // nose-to-eye vertical offset estimates pitch, and the eye line gives roll.
-        val yaw = (((nose.x - centerX) / eyeDistance) * 1.65f).coerceIn(-0.78f, 0.78f)
-        val pitch = ((((nose.y - centerY) / eyeDistance) - 0.17f) * 1.25f).coerceIn(-0.42f, 0.42f)
-        // Estimate the temple-to-temple span from face mesh landmarks and size the
-        // frame to the face, while clamping bad/partial detections to a safe range.
-        val templeSpan = abs(point(356).x - point(127).x)
-            .coerceIn(eyeDistance * 1.85f, eyeDistance * 2.85f)
-        val targetOuterWidth = templeSpan * 0.84f
-        val lensGap = eyeDistance * 0.16f
-        val lensWidth = max((targetOuterWidth - lensGap) * 0.5f, eyeDistance * 0.72f)
-        // Slightly taller lenses and a measured bridge gap look less like goggles.
-        val lensHeight = max(eyeDistance * 0.57f, 18f)
-        val lensCenterOffset = lensGap * 0.5f + lensWidth * 0.5f
-        val frameDepth = max(eyeDistance * 0.052f, 2.3f)
-        val focalLength = eyeDistance * 4.2f
-
-        data class P3(val x: Float, val y: Float, val z: Float)
-        fun project(p: P3): PointF {
-            val cy = kotlin.math.cos(yaw); val sy = kotlin.math.sin(yaw)
-            val cp = kotlin.math.cos(pitch); val sp = kotlin.math.sin(pitch)
-            val cr = kotlin.math.cos(eyeRoll); val sr = kotlin.math.sin(eyeRoll)
-            val x1 = p.x * cy + p.z * sy
-            val z1 = -p.x * sy + p.z * cy
-            val y1 = p.y * cp - z1 * sp
-            val z2 = p.y * sp + z1 * cp
-            val x2 = x1 * cr - y1 * sr
-            val y2 = x1 * sr + y1 * cr
-            val perspective = focalLength / (focalLength + z2).coerceAtLeast(focalLength * 0.45f)
-            return PointF(centerX + x2 * perspective, centerY + y2 * perspective)
-        }
-
-        fun outline(cx: Float, cy: Float, z: Float, scale: Float = 1f): List<P3> {
-            val shape = selectedStyle.name.lowercase()
-            val points = ArrayList<P3>(48)
-            for (i in 0 until 48) {
-                val t = (2.0 * Math.PI * i / 48.0)
-                val c = kotlin.math.cos(t).toFloat()
-                val s = kotlin.math.sin(t).toFloat()
-                var nx = c
-                var ny = s
-                when {
-                    selectedStyle.round || shape.contains("round") || shape.contains("circle") -> {
-                        nx = c; ny = s
-                    }
-                    shape.contains("aviator") || shape.contains("pilot") -> {
-                        nx = c * (1f - 0.12f * s)
-                        ny = s * (if (s < 0f) 0.92f else 1.12f)
-                    }
-                    shape.contains("cat") -> {
-                        nx = c
-                        ny = s * (1f - 0.12f * c) - 0.06f * c
-                    }
-                    shape.contains("square") || shape.contains("sport") || shape.contains("classic") || shape.contains("black") -> {
-                        val exponent = 0.45f
-                        nx = kotlin.math.sign(c) * kotlin.math.abs(c).let { it.pow(exponent) }
-                        ny = kotlin.math.sign(s) * kotlin.math.abs(s).let { it.pow(exponent) }
+    private fun saveBitmapAsync(bmp: Bitmap) {
+        io.execute {
+            try {
+                val name = "OptiTry_${System.currentTimeMillis()}.jpg"
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/OptiTry")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
                 }
-                points.add(P3(cx + nx * lensWidth * 0.5f * scale, cy + ny * lensHeight * 0.5f * scale, z))
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("MediaStore insert returned null")
+                contentResolver.openOutputStream(uri)?.use { out: OutputStream ->
+                    if (!bmp.compress(Bitmap.CompressFormat.JPEG, 94, out)) throw IllegalStateException("JPEG encode failed")
+                } ?: throw IllegalStateException("Could not open output stream")
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                    contentResolver.update(uri, done, null, null)
+                }
+                toast(getString(R.string.saved_ok))
+            } catch (e: Throwable) {
+                Log.e(TAG, "save failed", e)
+                toast(getString(R.string.save_failed))
             }
-            return points
         }
+    }
 
-        fun path3(points: List<P3>, close: Boolean = true): android.graphics.Path {
-            val path = android.graphics.Path()
-            points.forEachIndexed { index, p ->
-                val q = project(p)
-                if (index == 0) path.moveTo(q.x, q.y) else path.lineTo(q.x, q.y)
-            }
-            if (close) path.close()
-            return path
-        }
+    private fun toast(msg: String) = main.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
-        val frameColor = selectedStyle.color
-        val sidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(210, (Color.red(frameColor) * 0.58f).toInt(), (Color.green(frameColor) * 0.58f).toInt(), (Color.blue(frameColor) * 0.58f).toInt())
-            style = Paint.Style.STROKE
-            strokeWidth = max(2f, eyeDistance * 0.035f)
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
-        val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = frameColor
-            style = Paint.Style.STROKE
-            strokeWidth = if (selectedStyle.sunglasses) max(eyeDistance * 0.045f, 4f) else max(eyeDistance * 0.031f, 2.7f)
-            strokeJoin = Paint.Join.ROUND
-        }
-        val lensFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (selectedStyle.sunglasses) Color.argb(168, 25, 36, 52) else Color.argb(22, 150, 205, 220)
-            style = Paint.Style.FILL
-        }
-        val bevelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(155, 255, 255, 255)
-            style = Paint.Style.STROKE
-            strokeWidth = max(1f, eyeDistance * 0.009f)
-        }
+    // ---- selection ------------------------------------------------------------------------------------------
 
-        val leftCx = -lensCenterOffset
-        val rightCx = lensCenterOffset
-        val lensY = 0f
-        // Draw the rear rim first, then the lens surface and the raised front rim.
-        for (cx in listOf(leftCx, rightCx)) {
-            val rear = outline(cx, lensY, -frameDepth)
-            val front = outline(cx, lensY, frameDepth)
-            val rearProjected = rear.map { project(it) }
-            val frontProjected = front.map { project(it) }
-            for (i in rear.indices step 3) {
-                val j = (i + 1) % rear.size
-                canvas.drawLine(rearProjected[i].x, rearProjected[i].y, frontProjected[i].x, frontProjected[i].y, sidePaint)
-            }
-            if (selectedStyle.sunglasses) canvas.drawPath(path3(outline(cx, lensY, frameDepth * 0.7f, 0.94f)), lensFill)
-            else canvas.drawPath(path3(outline(cx, lensY, frameDepth * 0.7f, 0.94f)), lensFill)
-            canvas.drawPath(path3(front), rimPaint)
-            canvas.drawPath(path3(outline(cx, lensY, frameDepth + 0.5f, 0.87f)), bevelPaint)
-        }
+    private fun select(spec: FrameSpec) {
+        selected = spec
+        selection[spec.category] = spec
+        renderer.setSpec(spec)
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_FRAME, spec.id).apply()
+        val pos = adapter.select(spec)
+        if (pos >= 0) list.smoothScrollToPosition(pos)
+        updateHeader()
+    }
 
-        // Nose bridge is a shallow 3D arch, not a flat horizontal connector.
-        val bridge = listOf(
-            P3(-lensCenterOffset + lensWidth * 0.42f, -lensHeight * 0.02f, frameDepth),
-            P3(-eyeDistance * 0.12f, -lensHeight * 0.10f, frameDepth * 1.4f),
-            P3(eyeDistance * 0.12f, -lensHeight * 0.10f, frameDepth * 1.4f),
-            P3(lensCenterOffset - lensWidth * 0.42f, -lensHeight * 0.02f, frameDepth)
+    private fun setCategory(c: Category) {
+        category = c
+        refreshPanel()
+        select(selection[c] ?: FrameCatalog.byCategory(c).first())
+    }
+
+    private fun refreshPanel() {
+        adapter.submit(FrameCatalog.byCategory(category), selection[category])
+        styleTab(tabEyeglasses, category == Category.EYEGLASSES)
+        styleTab(tabSunglasses, category == Category.SUNGLASSES)
+        updateHeader()
+    }
+
+    private fun updateHeader() {
+        nameView.text = selected.name
+        val material = if (selected.rim == com.optitry.app.eyewear.RimStyle.WIRE) getString(R.string.rim_metal) else getString(R.string.rim_acetate)
+        val kind = if (selected.category == Category.EYEGLASSES) getString(R.string.eyeglasses) else getString(R.string.sunglasses)
+        subView.text = "$kind · $material"
+    }
+
+    // ---- status overlay -------------------------------------------------------------------------------------
+
+    private fun showLoading(text: String) {
+        panel.visibility = View.GONE
+        showOverlay(text, getString(R.string.loading_hint), spinner = true)
+    }
+
+    private fun showError(message: String, retry: Boolean, photo: Boolean = false) {
+        panel.visibility = View.GONE
+        showOverlay(
+            getString(R.string.error_title), message, spinner = false,
+            primary = when {
+                retry -> getString(R.string.retry) to { startLive() }
+                photo -> getString(R.string.choose_another) to { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                else -> null
+            },
+            secondary = if (retry) getString(R.string.use_photo) to { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } else null
         )
-        val bridgePath = android.graphics.Path()
-        bridge.forEachIndexed { index, p ->
-            val q = project(p)
-            if (index == 0) bridgePath.moveTo(q.x, q.y) else bridgePath.lineTo(q.x, q.y)
-        }
-        val bridgeStroke = Paint(rimPaint).apply { style = Paint.Style.STROKE; strokeWidth = max(eyeDistance * 0.035f, 3f); strokeCap = Paint.Cap.ROUND }
-        canvas.drawPath(bridgePath, bridgeStroke)
+    }
 
-        // Temple arms extend backwards in depth and project toward the ears.
-        val templeStartY = lensHeight * 0.02f
-        val templeEndZ = -eyeDistance * 0.72f
-        val templePaths = listOf(
-            listOf(P3(-lensCenterOffset - lensWidth * 0.48f, templeStartY, frameDepth), P3(-lensCenterOffset - lensWidth * 0.68f, templeStartY + lensHeight * 0.04f, -eyeDistance * 0.18f), P3(-lensCenterOffset - lensWidth * 0.82f, templeStartY + lensHeight * 0.10f, templeEndZ)),
-            listOf(P3(lensCenterOffset + lensWidth * 0.48f, templeStartY, frameDepth), P3(lensCenterOffset + lensWidth * 0.68f, templeStartY + lensHeight * 0.04f, -eyeDistance * 0.18f), P3(lensCenterOffset + lensWidth * 0.82f, templeStartY + lensHeight * 0.10f, templeEndZ))
-        )
-        templePaths.forEach { points ->
-            val projected = points.map { project(it) }
-            for (i in 0 until projected.size - 1) {
-                canvas.drawLine(projected[i].x, projected[i].y, projected[i + 1].x, projected[i + 1].y, bridgeStroke)
-            }
-        }
+    private fun showOverlay(
+        title: String, message: String, spinner: Boolean,
+        primary: Pair<String, () -> Unit>? = null, secondary: Pair<String, () -> Unit>? = null
+    ) {
+        overlay.visibility = View.VISIBLE
+        overlaySpinner.visibility = if (spinner) View.VISIBLE else View.GONE
+        overlayTitle.text = title
+        overlayMessage.text = message
+        bindButton(overlayPrimary, primary)
+        bindButton(overlaySecondary, secondary)
+    }
 
-        if (selectedStyle.sunglasses) {
-            val shinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(48, 220, 240, 255)
-                style = Paint.Style.STROKE
-                strokeWidth = max(eyeDistance * 0.018f, 1.5f)
-                strokeCap = Paint.Cap.ROUND
-            }
-            for (cx in listOf(leftCx, rightCx)) {
-                val a = project(P3(cx - lensWidth * 0.20f, -lensHeight * 0.28f, frameDepth * 0.8f))
-                val b = project(P3(cx - lensWidth * 0.02f, lensHeight * 0.18f, frameDepth * 0.8f))
-                canvas.drawLine(a.x, a.y, b.x, b.y, shinePaint)
+    private fun bindButton(b: Button, spec: Pair<String, () -> Unit>?) {
+        if (spec == null) { b.visibility = View.GONE; return }
+        b.visibility = View.VISIBLE
+        b.text = spec.first
+        b.setOnClickListener { spec.second() }
+    }
+
+    private fun hideOverlay() {
+        overlay.visibility = View.GONE
+        panel.visibility = View.VISIBLE
+        topBar.visibility = View.VISIBLE
+    }
+
+    private fun setChip(text: String, good: Boolean) {
+        chip.text = text
+        (chip.background as? GradientDrawable)?.setColor(if (good) 0xCC0F766E.toInt() else 0x99000000.toInt())
+    }
+
+    // ---- view construction ----------------------------------------------------------------------------------
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
+
+    private fun rounded(color: Int, radiusDp: Int, strokeColor: Int? = null) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = radiusDp * resources.displayMetrics.density
+        if (strokeColor != null) setStroke(dp(1), strokeColor)
+    }
+
+    private fun text(content: String, sp: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        text = content
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        setTextColor(color)
+        if (bold) typeface = Typeface.DEFAULT_BOLD
+    }
+
+    private fun styleTab(tab: TextView, active: Boolean) {
+        tab.background = if (active) rounded(0xFF7C3AED.toInt(), 18) else rounded(0x00000000, 18)
+        tab.setTextColor(if (active) Color.WHITE else 0xFFB4B4C0.toInt())
+    }
+
+    private fun roundButton(iconRes: Int, description: String, onClick: () -> Unit): FrameLayout {
+        val size = dp(54)
+        return FrameLayout(this).apply {
+            background = rounded(0x26FFFFFF, 27, 0x33FFFFFF)
+            contentDescription = description
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            addView(ImageView(context).apply {
+                setImageResource(iconRes)
+                setColorFilter(Color.WHITE)
+            }, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+            layoutParams = LinearLayout.LayoutParams(size, size)
+        }
+    }
+
+    private fun buildUi() {
+        root = FrameLayout(this).apply { setBackgroundColor(0xFF0A0A0F.toInt()) }
+        root.addView(glView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // top bar: title + live status chip
+        topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x99000000.toInt(), 0x00000000))
+        }
+        topBar.addView(text("OptiTry", 20f, Color.WHITE, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        chip = text("", 13f, Color.WHITE).apply {
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = rounded(0x99000000.toInt(), 16)
+        }
+        topBar.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+
+        // bottom panel
+        panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                setColor(0xEE141418.toInt())
+                val r = 26 * resources.displayMetrics.density
+                cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
             }
         }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        nameView = text("", 17f, Color.WHITE, bold = true)
+        subView = text("", 12f, 0xFFA0A0B0.toInt())
+        titles.addView(nameView)
+        titles.addView(subView)
+        header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(0x22FFFFFF, 20)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+        }
+        fun tab(label: String, c: Category) = text(label, 13f, Color.WHITE, bold = true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            setOnClickListener { setCategory(c) }
+        }
+        tabEyeglasses = tab(getString(R.string.eyeglasses), Category.EYEGLASSES)
+        tabSunglasses = tab(getString(R.string.sunglasses), Category.SUNGLASSES)
+        tabs.addView(tabEyeglasses)
+        tabs.addView(tabSunglasses)
+        header.addView(tabs)
+        panel.addView(header)
+
+        adapter = FrameAdapter { select(it) }
+        list = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
+            adapter = this@MainActivity.adapter
+            clipToPadding = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
+        panel.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(88)).apply { topMargin = dp(12) })
+
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        controls.addView(roundButton(R.drawable.ic_photo_library, getString(R.string.cd_gallery)) {
+            pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        })
+        val shutter = FrameLayout(this).apply {
+            background = rounded(Color.TRANSPARENT, 40, Color.WHITE).also { (it as GradientDrawable).setStroke(dp(4), Color.WHITE) }
+            contentDescription = getString(R.string.cd_capture)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { capture() }
+            addView(View(context).apply { background = rounded(Color.WHITE, 30) },
+                FrameLayout.LayoutParams(dp(60), dp(60), Gravity.CENTER))
+        }
+        controls.addView(shutter, LinearLayout.LayoutParams(dp(78), dp(78)).apply { marginStart = dp(34); marginEnd = dp(34) })
+        backToLive = roundButton(R.drawable.ic_photo_camera, getString(R.string.cd_live)) {
+            if (hasCameraPermission()) { startLive() } else showPermissionIntro()
+        }
+        backToLive.visibility = View.INVISIBLE
+        controls.addView(backToLive)
+        panel.addView(controls, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+
+        root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+
+        // status overlay (permission / loading / error)
+        overlay = FrameLayout(this).apply { setBackgroundColor(0xF20A0A0F.toInt()); isClickable = true }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(32), dp(32), dp(32), dp(32))
+        }
+        overlaySpinner = ProgressBar(this).apply { isIndeterminate = true }
+        column.addView(overlaySpinner, LinearLayout.LayoutParams(dp(44), dp(44)).apply { bottomMargin = dp(20) })
+        overlayTitle = text("", 20f, Color.WHITE, bold = true).apply { gravity = Gravity.CENTER }
+        column.addView(overlayTitle)
+        overlayMessage = text("", 14.5f, 0xFFB4B4C0.toInt()).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f) }
+        column.addView(overlayMessage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        overlayPrimary = Button(this).apply { isAllCaps = false; setTextColor(Color.WHITE); background = rounded(0xFF7C3AED.toInt(), 24) }
+        overlaySecondary = Button(this).apply { isAllCaps = false; setTextColor(Color.WHITE); background = rounded(0x22FFFFFF, 24) }
+        column.addView(overlayPrimary, LinearLayout.LayoutParams(dp(260), dp(48)).apply { topMargin = dp(24) })
+        column.addView(overlaySecondary, LinearLayout.LayoutParams(dp(260), dp(48)).apply { topMargin = dp(10) })
+        overlay.addView(column, FrameLayout.LayoutParams(dp(420).let { ViewGroup.LayoutParams.WRAP_CONTENT }, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // edge-to-edge insets
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            topBar.setPadding(dp(16) + bars.left, dp(10) + bars.top, dp(16) + bars.right, dp(10))
+            panel.setPadding(dp(16) + bars.left, dp(14), dp(16) + bars.right, dp(12) + bars.bottom)
+            insets
+        }
+        applyPanelWidth()
+    }
+
+    /** Phones: full width. Tablets / landscape: a centred card no wider than 560dp so it never sprawls. */
+    private fun applyPanelWidth() {
+        val maxW = dp(560)
+        val screenW = resources.displayMetrics.widthPixels
+        (panel.layoutParams as FrameLayout.LayoutParams).width = min(screenW, maxW).let { if (screenW <= maxW) ViewGroup.LayoutParams.MATCH_PARENT else it }
+        panel.requestLayout()
+    }
+
+    private companion object {
+        const val TAG = "MainActivity"
+        const val PREFS = "optitry"
+        const val KEY_FRAME = "frame_id"
+        const val MAX_PHOTO_SIDE = 1600
     }
 }

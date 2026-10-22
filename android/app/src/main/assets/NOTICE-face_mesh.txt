@@ -1,0 +1,4 @@
+face_mesh.txt is derived from MediaPipe's canonical_face_model.obj
+(https://github.com/google/mediapipe, mediapipe/modules/face_geometry/data/canonical_face_model.obj),
+Copyright 2020 The MediaPipe Authors, licensed under the Apache License 2.0.
+It is rendered invisibly (depth-only) so the frame temples and nose bridge are hidden behind the real face.
