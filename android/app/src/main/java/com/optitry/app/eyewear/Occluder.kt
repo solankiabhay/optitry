@@ -40,27 +40,30 @@ object Occluders {
     const val HEAD_RY = 10.5f
     const val HEAD_RZ = 9.0f
 
-    fun build(face: OccluderMesh): OccluderMesh {
-        val facePos = FloatArray(face.positions.size)
-        for (i in 0 until face.vertexCount) {
-            facePos[i * 3] = face.positions[i * 3] * FACE_SHRINK
-            facePos[i * 3 + 1] = SHRINK_CENTER_Y + (face.positions[i * 3 + 1] - SHRINK_CENTER_Y) * FACE_SHRINK
-            facePos[i * 3 + 2] = face.positions[i * 3 + 2] * FACE_SHRINK
-        }
-        val rings = 14; val segs = 20
-        val head = ArrayList<Float>()
+    // Pinna (outer ear) proxies. Without them the part of the arm that hooks behind the ear would be drawn ON TOP of the ear.
+    // Top of the ear ~2 cm above the pupils (y=4.0), lobe near the nose base (y=-1.7); the ear stands ~1 cm proud of the skull.
+    const val EAR_CX = 8.20f
+    const val EAR_CY = 1.15f
+    const val EAR_CZ = -4.30f
+    const val EAR_RX = 0.95f
+    const val EAR_RY = 2.85f
+    const val EAR_RZ = 2.00f
+
+    /** Appends an ellipsoid (rings x segs grid, poles included) and returns nothing; vertex order matches the original head proxy. */
+    private fun appendEllipsoid(
+        pos: ArrayList<Float>, idx: ArrayList<Short>,
+        cx: Float, cy: Float, cz: Float, rx: Float, ry: Float, rz: Float, rings: Int, segs: Int
+    ) {
+        val base = pos.size / 3
         for (i in 0..rings) {
             val phi = PI * i / rings
             for (j in 0 until segs) {
                 val th = 2.0 * PI * j / segs
-                head.add((HEAD_RX * sin(phi) * cos(th)).toFloat())
-                head.add((HEAD_CY + HEAD_RY * cos(phi)).toFloat())
-                head.add((HEAD_CZ + HEAD_RZ * sin(phi) * sin(th)).toFloat())
+                pos.add(cx + (rx * sin(phi) * cos(th)).toFloat())
+                pos.add(cy + (ry * cos(phi)).toFloat())
+                pos.add(cz + (rz * sin(phi) * sin(th)).toFloat())
             }
         }
-        val base = face.vertexCount
-        val idx = ArrayList<Short>()
-        face.indices.forEach { idx.add(it) }
         for (i in 0 until rings) for (j in 0 until segs) {
             val j2 = (j + 1) % segs
             val a = base + i * segs + j; val b = base + i * segs + j2
@@ -68,7 +71,29 @@ object Occluders {
             idx.add(a.toShort()); idx.add(c.toShort()); idx.add(b.toShort())
             idx.add(b.toShort()); idx.add(c.toShort()); idx.add(d.toShort())
         }
-        return OccluderMesh(facePos + head.toFloatArray(), idx.toShortArray())
+    }
+
+    fun build(face: OccluderMesh): OccluderMesh {
+        val pos = ArrayList<Float>(face.positions.size + 1500)
+        val idx = ArrayList<Short>(face.indices.size + 3000)
+        for (i in 0 until face.vertexCount) {
+            pos.add(face.positions[i * 3] * FACE_SHRINK)
+            pos.add(SHRINK_CENTER_Y + (face.positions[i * 3 + 1] - SHRINK_CENTER_Y) * FACE_SHRINK)
+            pos.add(face.positions[i * 3 + 2] * FACE_SHRINK)
+        }
+        face.indices.forEach { idx.add(it) }
+        appendEllipsoid(pos, idx, 0f, HEAD_CY, HEAD_CZ, HEAD_RX, HEAD_RY, HEAD_RZ, 14, 20)
+        appendEllipsoid(pos, idx, EAR_CX, EAR_CY, EAR_CZ, EAR_RX, EAR_RY, EAR_RZ, 10, 14)
+        appendEllipsoid(pos, idx, -EAR_CX, EAR_CY, EAR_CZ, EAR_RX, EAR_RY, EAR_RZ, 10, 14)
+        return OccluderMesh(pos.toFloatArray(), idx.toShortArray())
+    }
+
+    /** True if the point lies inside the pinna proxy of the given side (+1 right / -1 left), shrunk by [shrink] (1 = full size). */
+    fun insideEar(x: Float, y: Float, z: Float, side: Float, shrink: Float = 1f): Boolean {
+        val dx = (x - side * EAR_CX) / (EAR_RX * shrink)
+        val dy = (y - EAR_CY) / (EAR_RY * shrink)
+        val dz = (z - EAR_CZ) / (EAR_RZ * shrink)
+        return dx * dx + dy * dy + dz * dz < 1f
     }
 
     /** True if canonical-space point lies inside the (unshrunk-by-temple) head ellipsoid. */

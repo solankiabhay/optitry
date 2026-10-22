@@ -190,4 +190,66 @@ class EyewearGeometryTest {
         val xs = (0 until g.lenses.vertexCount).map { g.lenses.position(it).x }
         assertEquals(0f, xs.sum() / xs.size, 0.02f)
     }
+
+    // ---- ear fit ----------------------------------------------------------------------------------------------
+
+    private fun templeVertices(g: GlassesMesh, side: Float): List<Vec3> =
+        (0 until g.frame.vertexCount)
+            .filter { g.frame.vertices[it * MeshData.STRIDE_FLOATS + 6] == EyewearGeometry.PART_TEMPLE }
+            .map { g.frame.position(it) }
+            .filter { it.x * side > 0f }
+
+    @Test fun everyTempleRestsOnTheEarTopAndEndsBehindTheEar() {
+        for (spec in FrameCatalog.all) {
+            val g = meshesFor(spec)
+            for (side in listOf(1f, -1f)) {
+                val v = templeVertices(g, side)
+                val overEar = v.filter { it.z in -4.6f..-3.6f }
+                assertTrue("${spec.id} no arm over the ear", overEar.isNotEmpty())
+                val half = spec.templeHeight / 2f + 0.12f
+                for (p in overEar) assertTrue("${spec.id} arm at the ear top is at y=${p.y}, want ${EyewearGeometry.EAR_ARM_Y}", abs(p.y - EyewearGeometry.EAR_ARM_Y) <= half)
+                val tipY = v.minOf { it.y }
+                assertTrue("${spec.id} arm tip y=$tipY", tipY in 0.15f..0.95f)
+                val tip = v.filter { it.y < tipY + 0.3f }
+                val tipZ = tip.sumOf { it.z.toDouble() } / tip.size
+                assertTrue("${spec.id} arm tip z=$tipZ should be behind the ear", tipZ < -6.2)
+            }
+        }
+    }
+
+    @Test fun armsNeverPassThroughTheEarAndHookIsHiddenByIt() {
+        for (spec in FrameCatalog.all) {
+            val g = meshesFor(spec)
+            for (side in listOf(1f, -1f)) {
+                for (p in templeVertices(g, side)) {
+                    assertTrue("${spec.id} arm vertex $p is inside the ear", !Occluders.insideEar(p.x, p.y, p.z, side, 0.90f))
+                    assertTrue("${spec.id} arm vertex $p is inside the head", !Occluders.insideHead(p.x, p.y, p.z))
+                }
+            }
+        }
+    }
+
+    @Test fun templeCentrelineIsSmoothMonotoneAndRealisticallyLong() {
+        for (spec in FrameCatalog.all) {
+            val g = meshesFor(spec)
+            val rise = EyewearGeometry.EAR_ARM_Y - g.hingeY
+            assertTrue("${spec.id} hinge y=${g.hingeY} leaves a ${rise} cm climb to the ear", abs(rise) <= 1.4f)
+            val c = EyewearGeometry.templeCenterline(spec, 1f, g.hingeX, g.hingeY)
+            var length = 0f
+            for (i in 1 until c.size) {
+                length += (c[i] - c[i - 1]).length()
+                assertTrue("${spec.id} arm doubles back in z at $i", c[i].z <= c[i - 1].z + 0.05f)
+                if (i >= 2) {
+                    val a = c[i - 1] - c[i - 2]; val b = c[i] - c[i - 1]
+                    val cos = a.dot(b) / (a.length() * b.length())
+                    assertTrue("${spec.id} arm kinks at $i (cos=$cos)", cos > 0.82f) // < ~35 degrees per sample
+                }
+                if (c[i].z > -4.0f && c[i - 1].z - c[i].z > 1e-3f) {
+                    val slope = abs((c[i].y - c[i - 1].y) / (c[i - 1].z - c[i].z))
+                    assertTrue("${spec.id} arm slope ${slope} before the ear is too steep", slope < 0.30f)
+                }
+            }
+            assertTrue("${spec.id} temple length $length cm", length in 13.0f..17.5f)
+        }
+    }
 }

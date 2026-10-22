@@ -9,7 +9,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** Frame + lenses in MediaPipe canonical head space (cm). Frame is opaque/crystal, lenses are alpha blended. */
-class GlassesMesh(val frame: MeshData, val lenses: MeshData, val hingeX: Float)
+class GlassesMesh(val frame: MeshData, val lenses: MeshData, val hingeX: Float, val hingeY: Float = 0f)
 
 /**
  * Procedural 3D eyewear. Every part is a real swept solid with thickness (rim bands, bridge, end
@@ -30,11 +30,21 @@ object EyewearGeometry {
     private const val MIN_HINGE_X = 6.30f
     private const val MAX_HINGE_X = 7.45f
 
-    // Temple centreline (x, y relative to hinge, z) running outside the head to the ear and bending down behind it.
-    // x values keep a clearance from the canonical face surface (x~6.4 at z=2, 7.2 at z=0, 7.7 at z=-2).
-    private val TEMPLE_X = floatArrayOf(0f, 7.30f, 7.70f, 8.10f, 8.20f, 8.10f, 7.90f)
-    private val TEMPLE_DY = floatArrayOf(0f, -0.05f, -0.10f, -0.20f, -0.55f, -1.75f, -3.25f)
-    private val TEMPLE_Z = floatArrayOf(0f, 2.0f, -0.5f, -3.2f, -5.0f, -6.2f, -6.6f)
+    /**
+     * Ear anchor in canonical cm. The top of the ear sits ~2 cm above the pupils (y~4.0); the arm rests on it
+     * (centreline y = [EAR_ARM_Y]) and then bends down behind the ear. Every frame is routed to this same anchor,
+     * so the arm lands on the ear whatever height the hinge happens to be at.
+     */
+    const val EAR_ARM_Y = 4.30f
+
+    // Temple centreline, hinge -> ear top -> behind the ear. x keeps a clearance from the canonical face surface
+    // (x~6.4 at z=2, 7.2 at z=0, 7.7 at z=-2) and from the skull; z is fixed so all frames meet the ear at the same place.
+    private val TEMPLE_X = floatArrayOf(0f, 7.30f, 7.70f, 8.00f, 8.15f, 8.15f, 8.10f, 7.95f, 7.80f, 7.70f)
+    private val TEMPLE_Z = floatArrayOf(0f, 2.0f, -0.5f, -2.6f, -4.0f, -5.0f, -5.7f, -6.15f, -6.35f, -6.40f)
+    /** Share of the hinge->ear-top height difference reached at control points 0..5 (the arm climbs/falls gently, then rests on the ear). */
+    private val TEMPLE_RISE = floatArrayOf(0f, 0.10f, 0.35f, 0.70f, 1.0f, 1.0f)
+    /** Drop below [EAR_ARM_Y] at control points 6..9 (the bend behind the ear down to the tip). */
+    private val TEMPLE_DROP = floatArrayOf(0.45f, 1.40f, 2.50f, 3.60f)
 
     fun frameZ(spec: FrameSpec, x: Float) = FRAME_Z0 - spec.wrap * x * x
 
@@ -58,7 +68,9 @@ object EyewearGeometry {
         // Hinge position derived from the outer rim wall of the right lens (left mirrors it).
         val outer = right.outerPieceIndex
         val outerRim = right.rimPath[outer]
-        val hingeX = (outerRim.x + 0.30f).coerceIn(MIN_HINGE_X, MAX_HINGE_X).let { max(it, min(outerRim.x + 0.12f, 7.6f)) }
+        // Tapered lenses (aviators) are widest below the hinge; never let the lens poke out beyond the hinge.
+        val outerX = max(outerRim.x, right.rimPath.maxOf { it.x } - 0.10f)
+        val hingeX = (outerX + 0.30f).coerceIn(MIN_HINGE_X, MAX_HINGE_X).let { max(it, min(outerX + 0.12f, 7.6f)) }
         val hingeY = outerRim.y + 0.05f
 
         for (side in listOf(+1f, -1f)) {
@@ -69,7 +81,7 @@ object EyewearGeometry {
         }
         addBridge(frame, spec, right, left)
         addNosePads(frame, spec, right, left)
-        return GlassesMesh(frame.build(), lens.build(), hingeX)
+        return GlassesMesh(frame.build(), lens.build(), hingeX, hingeY)
     }
 
     // ---- lens/rim description ------------------------------------------------------------------------------
@@ -103,13 +115,14 @@ object EyewearGeometry {
             }
             outward = outs
             rimPath = path
-            // end piece: outermost point in the upper half of the lens; bridge: innermost point just above centre
+            // end piece: outermost point in the upper outer part of the lens (where real hinges sit, near brow height, so the
+            // arm runs almost level to the ear top); bridge: innermost point just above centre
             var bestOuter = 0; var bestX = -1e9f
             var bestInner = 0; var bestInnerX = 1e9f
             for (i in 0 until n) {
                 val ly = contour[i][1]
                 val gx = abs(centerX + contour[i][0])
-                if (ly >= 0.05f * halfHeight && ly <= 0.5f * halfHeight && gx > bestX) { bestX = gx; bestOuter = i }
+                if (ly >= 0.40f * halfHeight && ly <= 0.70f * halfHeight && gx > bestX) { bestX = gx; bestOuter = i }
                 if (ly >= 0.10f * halfHeight && ly <= 0.45f * halfHeight && gx < bestInnerX) { bestInnerX = gx; bestInner = i }
             }
             outerPieceIndex = bestOuter
@@ -215,13 +228,24 @@ object EyewearGeometry {
         Sweeper.sweep(mb, pts, false, Profiles.circle(0.075f, 8), pts.map { Vec3(1f, 0f, 0f) }, null, null, PART_HINGE, true)
     }
 
-    private fun addTemple(mb: MeshBuilder, spec: FrameSpec, side: Float, hingeX: Float, hingeY: Float) {
+    /** Smooth arm centreline (hinge -> over the ear -> behind it) for one side; [side] is +1 (right) or -1 (left). */
+    internal fun templeCenterline(spec: FrameSpec, side: Float, hingeX: Float, hingeY: Float): List<Vec3> {
         val hingeZ = frameZ(spec, hingeX) - 0.02f
+        val rise = EAR_ARM_Y - hingeY
         val controls = TEMPLE_X.indices.map { i ->
             val x = if (i == 0) hingeX else max(TEMPLE_X[i], hingeX + 0.02f * i)
-            Vec3(side * x, hingeY + TEMPLE_DY[i], if (i == 0) hingeZ else TEMPLE_Z[i])
+            val y = when {
+                i == 0 -> hingeY
+                i < TEMPLE_RISE.size -> hingeY + rise * TEMPLE_RISE[i]
+                else -> EAR_ARM_Y - TEMPLE_DROP[i - TEMPLE_RISE.size]
+            }
+            Vec3(side * x, y, if (i == 0) hingeZ else TEMPLE_Z[i])
         }
-        val pts = Sweeper.catmullRom(controls, 7)
+        return Sweeper.catmullRom(controls, 7)
+    }
+
+    private fun addTemple(mb: MeshBuilder, spec: FrameSpec, side: Float, hingeX: Float, hingeY: Float) {
+        val pts = templeCenterline(spec, side, hingeX, hingeY)
         val m = pts.size
         val hint = pts.map { Vec3(side, 0f, 0f) }
         val acetate = spec.rim == RimStyle.ACETATE
