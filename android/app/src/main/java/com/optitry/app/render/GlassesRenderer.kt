@@ -7,6 +7,10 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
 import android.util.Log
+import com.optitry.app.core.ContactLens
+import com.optitry.app.core.Eye
+import com.optitry.app.core.EyeMapping
+import com.optitry.app.core.Eyes
 import com.optitry.app.core.FacePose
 import com.optitry.app.core.FitMode
 import com.optitry.app.core.Mat4
@@ -19,6 +23,7 @@ import com.optitry.app.eyewear.Occluders
 import com.optitry.app.eyewear.Pattern
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -39,11 +44,24 @@ class GlassesRenderer(
     @Volatile private var captureCallback: ((Bitmap?) -> Unit)? = null
     @Volatile private var clearRequested = false
 
+    /** Contact lens to draw on both irises (null = none) and its strength 0..1. */
+    @Volatile var lens: ContactLens? = null
+        set(value) { field = value; requestRender() }
+    @Volatile var lensOpacity: Float = 0.72f
+        set(value) { field = value.coerceIn(0.1f, 1f); requestRender() }
+    /** False while the contact-lens tab is open (glasses hidden). */
+    @Volatile var glassesVisible: Boolean = true
+        set(value) { field = value; requestRender() }
+
     // ---- GL-thread state ----
     private var bg: GlProgram? = null
     private var occ: GlProgram? = null
     private var frameProg: GlProgram? = null
     private var lensProg: GlProgram? = null
+    private var maskProg: GlProgram? = null
+    private var irisProg: GlProgram? = null
+    private var irisQuad: FloatBuffer? = null
+    private var maskBuf: FloatBuffer? = null
     private var quadBuffer = 0
     private var texture = 0
     private var texW = 0
@@ -53,6 +71,7 @@ class GlassesRenderer(
     private var imageW = 0
     private var imageH = 0
     private var currentPose: FacePose? = null
+    private var currentEyes: Eyes? = null
     private var ambient = 1f
     private var mirror = true
     private var hasFrame = false
@@ -90,6 +109,10 @@ class GlassesRenderer(
             occ = GlProgram(Shaders.OCCLUDER_VS, Shaders.OCCLUDER_FS)
             frameProg = GlProgram(Shaders.MESH_VS, Shaders.FRAME_FS)
             lensProg = GlProgram(Shaders.MESH_VS, Shaders.LENS_FS)
+            maskProg = GlProgram(Shaders.MASK_VS, Shaders.MASK_FS)
+            irisProg = GlProgram(Shaders.IRIS_VS, Shaders.IRIS_FS)
+            irisQuad = floatBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
+            maskBuf = ByteBuffer.allocateDirect(40 * 2 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
             val quad = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
             val qb = ByteBuffer.allocateDirect(quad.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -140,17 +163,21 @@ class GlassesRenderer(
             clearRequested = false
             hasFrame = false
             currentPose = null
+            currentEyes = null
         }
         consumeFrame()
         GLES20.glViewport(0, 0, viewW, viewH)
         GLES20.glClearColor(0.04f, 0.04f, 0.06f, 1f)
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT or GLES20.GL_STENCIL_BUFFER_BIT)
 
         if (hasFrame && imageW > 0) {
             drawBackground()
+            val lensNow = lens
+            val eyes = currentEyes
+            if (lensNow != null && eyes != null) drawContactLenses(lensNow, eyes)
             val pose = currentPose
             val spec = desiredSpec
-            if (pose != null && spec != null) {
+            if (glassesVisible && pose != null && spec != null) {
                 ensureGlasses(spec)
                 drawGlasses(pose, spec)
             }
@@ -177,6 +204,7 @@ class GlassesRenderer(
                 }
                 imageW = bmp.width; imageH = bmp.height
                 currentPose = slot.pose
+                currentEyes = slot.eyes
                 ambient = slot.ambient
                 mirror = slot.mirror
                 hasFrame = true
@@ -204,6 +232,86 @@ class GlassesRenderer(
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(a)
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+    }
+
+    private fun floatBuffer(a: FloatArray): FloatBuffer =
+        ByteBuffer.allocateDirect(a.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().also { it.put(a).position(0) }
+
+    /** Cosmetic lens on both irises, clipped to the eyelid opening so blinks and half-closed eyes look right. */
+    private fun drawContactLenses(lens: ContactLens, eyes: Eyes) {
+        val mp = maskProg ?: return
+        val ip = irisProg ?: return
+        val quad = irisQuad ?: return
+        val buf = maskBuf ?: return
+        val pxScale = EyeMapping.scale(imageW, imageH, viewW, viewH, FitMode.COVER)
+        val (vx, vy) = ViewportMapping.visibleFraction(imageW, imageH, viewW, viewH, FitMode.COVER)
+
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glEnable(GLES20.GL_STENCIL_TEST)
+
+        // 1) eyelid openings -> stencil
+        GLES20.glStencilMask(0xFF)
+        GLES20.glClear(GLES20.GL_STENCIL_BUFFER_BIT)
+        GLES20.glStencilFunc(GLES20.GL_ALWAYS, 1, 0xFF)
+        GLES20.glStencilOp(GLES20.GL_KEEP, GLES20.GL_KEEP, GLES20.GL_REPLACE)
+        GLES20.glColorMask(false, false, false, false)
+        mp.use()
+        val aMask = mp.attrib("aPos")
+        for (eye in listOf(eyes.right, eyes.left)) {
+            val n = eye.contour.size / 2
+            if (n < 3 || n > 38) continue
+            buf.position(0)
+            var cx = 0f; var cy = 0f
+            val ndc = FloatArray(n * 2)
+            for (i in 0 until n) {
+                val p = EyeMapping.toView(eye.contour[i * 2], eye.contour[i * 2 + 1], imageW, imageH, viewW, viewH, FitMode.COVER, mirror)
+                ndc[i * 2] = p[0] / viewW * 2f - 1f
+                ndc[i * 2 + 1] = 1f - p[1] / viewH * 2f
+                cx += ndc[i * 2]; cy += ndc[i * 2 + 1]
+            }
+            buf.put(cx / n).put(cy / n)
+            for (i in 0 until n) buf.put(ndc[i * 2]).put(ndc[i * 2 + 1])
+            buf.put(ndc[0]).put(ndc[1])
+            buf.position(0)
+            GLES20.glEnableVertexAttribArray(aMask)
+            GLES20.glVertexAttribPointer(aMask, 2, GLES20.GL_FLOAT, false, 0, buf)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, n + 2)
+            GLES20.glDisableVertexAttribArray(aMask)
+        }
+        GLES20.glColorMask(true, true, true, true)
+
+        // 2) irises, only where the stencil says the eye is open
+        GLES20.glStencilFunc(GLES20.GL_EQUAL, 1, 0xFF)
+        GLES20.glStencilOp(GLES20.GL_KEEP, GLES20.GL_KEEP, GLES20.GL_KEEP)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        ip.use()
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture)
+        GLES20.glUniform1i(ip.uniform("uTex"), 0)
+        GLES20.glUniform2f(ip.uniform("uView"), viewW.toFloat(), viewH.toFloat())
+        GLES20.glUniform2f(ip.uniform("uVisible"), vx, vy)
+        GLES20.glUniform1f(ip.uniform("uMirror"), if (mirror) 1f else 0f)
+        val c1 = rgb(lens.color); val c2 = rgb(lens.color2)
+        GLES20.glUniform3f(ip.uniform("uColor"), c1[0], c1[1], c1[2])
+        GLES20.glUniform3f(ip.uniform("uColor2"), c2[0], c2[1], c2[2])
+        GLES20.glUniform1f(ip.uniform("uOpacity"), lensOpacity)
+        GLES20.glUniform1f(ip.uniform("uPupil"), 0.34f)
+        val aLocal = ip.attrib("aLocal")
+        for (eye: Eye in listOf(eyes.right, eyes.left)) {
+            val c = EyeMapping.toView(eye.u, eye.v, imageW, imageH, viewW, viewH, FitMode.COVER, mirror)
+            val r = eye.radiusPx * pxScale * 1.04f
+            GLES20.glUniform2f(ip.uniform("uCenter"), c[0] / viewW * 2f - 1f, 1f - c[1] / viewH * 2f)
+            GLES20.glUniform2f(ip.uniform("uRadiusNdc"), r * 2f / viewW, r * 2f / viewH)
+            quad.position(0)
+            GLES20.glEnableVertexAttribArray(aLocal)
+            GLES20.glVertexAttribPointer(aLocal, 2, GLES20.GL_FLOAT, false, 0, quad)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glDisableVertexAttribArray(aLocal)
+        }
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glDisable(GLES20.GL_STENCIL_TEST)
     }
 
     private fun ensureGlasses(spec: FrameSpec) {
@@ -310,8 +418,8 @@ class GlassesRenderer(
     }
 
     private fun releaseGl() {
-        bg?.release(); occ?.release(); frameProg?.release(); lensProg?.release()
-        bg = null; occ = null; frameProg = null; lensProg = null
+        bg?.release(); occ?.release(); frameProg?.release(); lensProg?.release(); maskProg?.release(); irisProg?.release()
+        bg = null; occ = null; frameProg = null; lensProg = null; maskProg = null; irisProg = null
         frameMesh = null; lensMesh = null; occluder = null // old context is gone; nothing valid to delete
     }
 

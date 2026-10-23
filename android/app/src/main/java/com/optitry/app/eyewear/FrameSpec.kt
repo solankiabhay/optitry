@@ -67,12 +67,12 @@ data class FrameSpec(
     val pattern: Pattern = Pattern.SOLID,
     val metallic: Boolean = false,
     val tint: LensTint,
-    val rimWidth: Float = if (rim == RimStyle.ACETATE) 0.38f else 0.11f,
-    val rimDepth: Float = if (rim == RimStyle.ACETATE) 0.55f else 0.11f,
+    val rimWidth: Float = if (rim == RimStyle.ACETATE) 0.46f else 0.18f,
+    val rimDepth: Float = if (rim == RimStyle.ACETATE) 0.55f else 0.18f,
     val bridgeWidth: Float = 1.8f,
     val wrap: Float = 0.022f,
-    val templeThickness: Float = if (rim == RimStyle.ACETATE) 0.24f else 0.13f,
-    val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.50f else 0.13f
+    val templeThickness: Float = if (rim == RimStyle.ACETATE) 0.30f else 0.19f,
+    val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.80f else 0.19f
 ) {
     val isTranslucentFrame: Boolean get() = pattern == Pattern.CRYSTAL
 }
@@ -89,7 +89,7 @@ object FrameCatalog {
     private val SQUARE = LensShape(5.0f, 4.5f, 4.0f)
     private val CATEYE = LensShape(5.3f, 4.1f, 2.7f, taper = 0.10f, lift = 0.50f)
     private val AVIATOR = LensShape(5.6f, 5.1f, 2.2f, taper = -0.13f)
-    private val BROWLINE = LensShape(5.4f, 4.0f, 3.0f, taper = 0.05f, topBoost = 1.1f)
+    private val BROWLINE = LensShape(5.4f, 4.0f, 3.0f, taper = 0.05f, topBoost = 0.8f)
     private val SPORT = LensShape(5.8f, 4.3f, 3.0f, taper = 0.04f)
     private val MODERN_OVAL = LensShape(5.1f, 3.8f, 2.1f)
     private val SLIM_RECT = LensShape(5.6f, 3.6f, 4.2f)

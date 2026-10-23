@@ -156,8 +156,10 @@ class CameraController(
             matrix.postTranslate(dw / 2f, dh / 2f)
             canvas!!.drawBitmap(src, matrix, null)
 
-            val pose = tracker.trackVideo(dst, image.imageInfo.timestamp)
+            val tracked = tracker.trackVideo(dst, image.imageInfo.timestamp)
+            val pose = tracked?.pose
             slot.pose = pose
+            slot.eyes = tracked?.eyes
             slot.mirror = mirror
             ambientSmoothed += (estimateAmbient(dst) - ambientSmoothed) * 0.08f
             slot.ambient = ambientSmoothed

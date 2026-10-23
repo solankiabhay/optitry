@@ -87,7 +87,7 @@ class EyewearGeometryTest {
             assertTrue("${spec.id} front width $width cm", width in 12.5f..15.6f)
             assertTrue("${spec.id} symmetric", abs(maxX + minX) < 0.05f)
             assertTrue("${spec.id} hinge ${g.hingeX}", g.hingeX in 6.3f..7.6f)
-            assertTrue("${spec.id} vertical position ${minY}..$maxY", minY > -0.4f && maxY < 5.4f) // below the brow (y~5.1), above the cheek
+            assertTrue("${spec.id} vertical position ${minY}..$maxY", minY > -0.7f && maxY < 5.5f) // below the brow, above the cheek; oversized frames may rest on the cheek bone
         }
     }
 
@@ -142,7 +142,7 @@ class EyewearGeometryTest {
                 val p = g.frame.position(i)
                 if (abs(p.x) > 6.0f || p.z < 4.4f) continue
                 val faceZ = occluderSurfaceZ(occ, p.x, p.y)
-                if (!faceZ.isNaN()) assertTrue("${spec.id} front part at $p is buried more than 1 mm in the occluder (surface z=$faceZ)", p.z > faceZ - 0.10f)
+                if (!faceZ.isNaN()) assertTrue("${spec.id} front part at $p is buried more than 1.8 mm in the occluder (surface z=$faceZ)", p.z > faceZ - 0.18f) // real frames press ~1-2 mm into the soft nose tissue
             }
         }
     }

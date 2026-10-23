@@ -7,8 +7,14 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import com.optitry.app.core.EyeExtractor
+import com.optitry.app.core.EyeSmoother
+import com.optitry.app.core.Eyes
 import com.optitry.app.core.FacePose
 import com.optitry.app.core.PoseSmoother
+
+/** Head pose plus (when iris landmarks are available) both eyes, from one camera frame. */
+class TrackResult(val pose: FacePose, val eyes: Eyes?)
 
 /**
  * MediaPipe Face Landmarker wrapper that returns the rigid head pose from the model's facial
@@ -19,7 +25,9 @@ class FaceTracker(private val context: Context) : AutoCloseable {
     private var video: FaceLandmarker? = null
     private var still: FaceLandmarker? = null
     private val smoother = PoseSmoother()
-    private var lastGood: FacePose? = null
+    private val eyeSmoother = EyeSmoother()
+    private var lastEyeNanos = 0L
+    private var lastGood: TrackResult? = null
     private var lastGoodNanos = 0L
     private var lastTimestampMs = -1L
 
@@ -50,13 +58,15 @@ class FaceTracker(private val context: Context) : AutoCloseable {
     @Synchronized
     fun resetTracking() {
         smoother.reset()
+        eyeSmoother.reset()
+        lastEyeNanos = 0L
         lastGood = null
         lastTimestampMs = -1L
     }
 
     /** [bitmap] must be upright. Returns the smoothed pose, or null if no face (after a short grace period). */
     @Synchronized
-    fun trackVideo(bitmap: Bitmap, timestampNanos: Long): FacePose? {
+    fun trackVideo(bitmap: Bitmap, timestampNanos: Long): TrackResult? {
         val landmarker = video ?: return null
         var ts = timestampNanos / 1_000_000L
         if (ts <= lastTimestampMs) ts = lastTimestampMs + 1 // MediaPipe requires strictly increasing timestamps
@@ -65,21 +75,42 @@ class FaceTracker(private val context: Context) : AutoCloseable {
         val raw = poseOf(result)
         if (raw != null) {
             val smoothed = smoother.update(raw, timestampNanos)
-            lastGood = smoothed
+            val eyesRaw = eyesOf(result, bitmap)
+            val eyes = if (eyesRaw == null) { eyeSmoother.reset(); lastEyeNanos = 0L; null } else {
+                val dt = if (lastEyeNanos == 0L) 1f / 30f else (timestampNanos - lastEyeNanos) / 1e9f
+                lastEyeNanos = timestampNanos
+                eyeSmoother.update(eyesRaw, dt)
+            }
+            val out = TrackResult(smoothed, eyes)
+            lastGood = out
             lastGoodNanos = timestampNanos
-            return smoothed
+            return out
         }
         val g = lastGood
         if (g != null && timestampNanos - lastGoodNanos < GRACE_NANOS) return g // ride out single dropped frames
         smoother.reset()
+        eyeSmoother.reset()
+        lastEyeNanos = 0L
         lastGood = null
         return null
     }
 
     @Synchronized
-    fun detectStill(bitmap: Bitmap): FacePose? {
+    fun detectStill(bitmap: Bitmap): TrackResult? {
         val landmarker = still ?: return null
-        return poseOf(landmarker.detect(BitmapImageBuilder(bitmap).build()))
+        val result = landmarker.detect(BitmapImageBuilder(bitmap).build())
+        val pose = poseOf(result) ?: return null
+        return TrackResult(pose, eyesOf(result, bitmap))
+    }
+
+    private fun eyesOf(result: FaceLandmarkerResult, bitmap: Bitmap): Eyes? {
+        val faces = result.faceLandmarks()
+        if (faces.isEmpty()) return null
+        val lm = faces[0]
+        if (lm.size < EyeExtractor.MIN_LANDMARKS) return null
+        val xs = FloatArray(lm.size) { lm[it].x() }
+        val ys = FloatArray(lm.size) { lm[it].y() }
+        return EyeExtractor.extract(xs, ys, bitmap.width, bitmap.height)
     }
 
     private fun poseOf(result: FaceLandmarkerResult): FacePose? {

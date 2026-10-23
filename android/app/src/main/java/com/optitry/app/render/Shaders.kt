@@ -60,22 +60,7 @@ void main() {
 }
 """
 
-    private const val COMMON = """
-uniform float uAmbient;
-uniform vec3 uLightDir;
-varying vec3 vPosCam;
-varying vec3 vNormalCam;
-varying vec3 vObj;
-varying vec2 vAux;
-
-// Cheap studio-style environment: sky gradient plus one soft box, in camera space (y up).
-vec3 envColor(vec3 r) {
-    float t = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 sky = mix(vec3(0.16, 0.16, 0.19), vec3(0.88, 0.92, 1.0), smoothstep(0.15, 1.0, t));
-    float box = smoothstep(0.82, 0.96, dot(r, normalize(vec3(-0.35, 0.55, 0.75))));
-    float box2 = smoothstep(0.88, 0.98, dot(r, normalize(vec3(0.55, 0.25, 0.80))));
-    return sky * uAmbient + vec3(1.0) * (box * 1.15 + box2 * 0.45);
-}
+    private const val NOISE = """
 float hash(vec3 p) {
     p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
     p *= 17.0;
@@ -90,6 +75,24 @@ float vnoise(vec3 x) {
             mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
         mix(mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), f.x),
             mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}
+"""
+
+    private const val COMMON = NOISE + """
+uniform float uAmbient;
+uniform vec3 uLightDir;
+varying vec3 vPosCam;
+varying vec3 vNormalCam;
+varying vec3 vObj;
+varying vec2 vAux;
+
+// Cheap studio-style environment: sky gradient plus one soft box, in camera space (y up).
+vec3 envColor(vec3 r) {
+    float t = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 sky = mix(vec3(0.16, 0.16, 0.19), vec3(0.88, 0.92, 1.0), smoothstep(0.15, 1.0, t));
+    float box = smoothstep(0.82, 0.96, dot(r, normalize(vec3(-0.35, 0.55, 0.75))));
+    float box2 = smoothstep(0.88, 0.98, dot(r, normalize(vec3(0.55, 0.25, 0.80))));
+    return sky * uAmbient + vec3(1.0) * (box * 1.15 + box2 * 0.45);
 }
 """
 
@@ -166,6 +169,57 @@ void main() {
     float a = clamp(uOpacity * fade + F * (0.2 + 0.6 * uMirror) + uMirror * 0.18, 0.0, 0.96);
     col += vec3(spec) * 0.9;
     gl_FragColor = vec4(clamp(col, 0.0, 1.0), max(a, clamp(spec, 0.0, 1.0)));
+}
+"""
+
+    /** Eyelid opening polygon, drawn into the stencil buffer only (positions already in NDC). */
+    const val MASK_VS = """
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+"""
+    const val MASK_FS = FRAG_PRECISION + """
+void main() { gl_FragColor = vec4(0.0); }
+"""
+
+    /** Cosmetic contact lens on the iris: coloured fibre pattern, limbal ring, clear pupil aperture, real catchlights kept. */
+    const val IRIS_VS = """
+attribute vec2 aLocal;
+uniform vec2 uCenter;
+uniform vec2 uRadiusNdc;
+varying vec2 vLocal;
+void main() {
+    vLocal = aLocal;
+    gl_Position = vec4(uCenter + aLocal * uRadiusNdc, 0.0, 1.0);
+}
+"""
+    const val IRIS_FS = FRAG_PRECISION + NOISE + """
+uniform sampler2D uTex;
+uniform vec2 uView;
+uniform vec2 uVisible;
+uniform float uMirror;
+uniform vec3 uColor;
+uniform vec3 uColor2;
+uniform float uOpacity;
+uniform float uPupil;
+varying vec2 vLocal;
+void main() {
+    float d = length(vLocal);
+    if (d > 1.0) discard;
+    vec2 s = gl_FragCoord.xy / uView;
+    s.y = 1.0 - s.y;
+    vec2 uv = vec2(0.5) + (s - vec2(0.5)) * uVisible;
+    if (uMirror > 0.5) uv.x = 1.0 - uv.x;
+    vec3 orig = texture2D(uTex, uv).rgb;
+    float luma = dot(orig, vec3(0.299, 0.587, 0.114));
+    float ang = atan(vLocal.y, vLocal.x);
+    vec2 cs = vec2(cos(ang), sin(ang));
+    float fibers = vnoise(vec3(cs * 5.0, d * 3.0)) * 0.6 + vnoise(vec3(cs * 14.0, d * 6.0)) * 0.4;
+    vec3 col = mix(uColor2, uColor, smoothstep(uPupil, 0.85, d));
+    col *= 0.70 + 0.60 * fibers;
+    col = mix(col, col * 0.35, smoothstep(0.78, 1.0, d) * 0.75);   // limbal ring
+    col *= 0.55 + 1.05 * luma;                                      // keep the eye's own shading and catchlights
+    float a = uOpacity * smoothstep(uPupil - 0.05, uPupil + 0.08, d) * (1.0 - smoothstep(0.90, 1.0, d));
+    gl_FragColor = vec4(clamp(col, 0.0, 1.0), a);
 }
 """
 }

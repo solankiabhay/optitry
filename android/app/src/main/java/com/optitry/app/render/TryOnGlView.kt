@@ -7,7 +7,7 @@ import android.opengl.GLSurfaceView
 class TryOnGlView(context: Context, val renderer: GlassesRenderer) : GLSurfaceView(context) {
     init {
         setEGLContextClientVersion(2)
-        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
+        setEGLConfigChooser(8, 8, 8, 8, 16, 8) // stencil is needed to clip the contact lens to the eyelid opening
         preserveEGLContextOnPause = true
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY

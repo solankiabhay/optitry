@@ -29,4 +29,9 @@
     <string name="cd_gallery">Choose a photo</string>
     <string name="cd_capture">Take photo</string>
     <string name="cd_live">Back to live camera</string>
+    <string name="contact_lenses">Lenses</string>
+    <string name="no_lens">No contact lens</string>
+    <string name="no_lens_short">None</string>
+    <string name="lens_sub">Contact lens · Colour try-on</string>
+    <string name="intensity">Strength</string>
 </resources>

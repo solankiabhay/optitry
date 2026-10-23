@@ -18,7 +18,7 @@ class GlassesMesh(val frame: MeshData, val lenses: MeshData, val hingeX: Float, 
  * +x right, +y up, +z out of the face, ~6.3 cm between pupils, nose bridge at z~5.8.
  */
 object EyewearGeometry {
-    const val FRAME_Z0 = 5.85f         // front plane of the frame at the nose bridge
+    const val FRAME_Z0 = 5.95f         // front plane of the frame at the nose bridge (thicker, realistic rims sit ~1 mm further forward)
     const val LENS_CENTER_Y = 2.45f    // eyes (pupils) sit at y~2.6
     const val PART_BODY = 0f
     const val PART_TEMPLE = 1f
@@ -35,7 +35,7 @@ object EyewearGeometry {
      * (centreline y = [EAR_ARM_Y]) and then bends down behind the ear. Every frame is routed to this same anchor,
      * so the arm lands on the ear whatever height the hinge happens to be at.
      */
-    const val EAR_ARM_Y = 4.30f
+    const val EAR_ARM_Y = 4.40f
 
     // Temple centreline, hinge -> ear top -> behind the ear. x keeps a clearance from the canonical face surface
     // (x~6.4 at z=2, 7.2 at z=0, 7.7 at z=-2) and from the skull; z is fixed so all frames meet the ear at the same place.

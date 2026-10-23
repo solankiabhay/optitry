@@ -2,6 +2,7 @@ package com.optitry.app
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -30,6 +31,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.SystemBarStyle
@@ -44,6 +46,8 @@ import androidx.exifinterface.media.ExifInterface
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.optitry.app.camera.CameraController
+import com.optitry.app.core.ContactLens
+import com.optitry.app.core.ContactLenses
 import com.optitry.app.eyewear.Category
 import com.optitry.app.eyewear.FrameCatalog
 import com.optitry.app.eyewear.FrameSpec
@@ -51,6 +55,7 @@ import com.optitry.app.render.GlassesRenderer
 import com.optitry.app.render.TryOnGlView
 import com.optitry.app.tracking.FaceTracker
 import com.optitry.app.ui.FrameAdapter
+import com.optitry.app.ui.LensAdapter
 import java.io.OutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -61,6 +66,7 @@ import kotlin.math.roundToInt
 class MainActivity : AppCompatActivity(), CameraController.Listener {
 
     private enum class Mode { LIVE, PHOTO }
+    private enum class Tab { EYEGLASSES, SUNGLASSES, LENSES }
 
     private val main = Handler(Looper.getMainLooper())
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
@@ -78,6 +84,11 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private lateinit var subView: TextView
     private lateinit var tabEyeglasses: TextView
     private lateinit var tabSunglasses: TextView
+    private lateinit var tabLenses: TextView
+    private lateinit var intensityRow: LinearLayout
+    private lateinit var intensitySeek: SeekBar
+    private lateinit var intensityValue: TextView
+    private lateinit var lensAdapter: LensAdapter
     private lateinit var list: RecyclerView
     private lateinit var adapter: FrameAdapter
     private lateinit var backToLive: FrameLayout
@@ -90,6 +101,9 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
 
     private var mode = Mode.LIVE
     private var category = Category.EYEGLASSES
+    private var tab = Tab.EYEGLASSES
+    private var selectedLens: ContactLens? = null
+    private var lensOpacity = 0.72f
     private val selection = HashMap<Category, FrameSpec>()
     private var selected: FrameSpec = FrameCatalog.eyeglasses.first()
     private var pendingSave: Bitmap? = null
@@ -131,7 +145,11 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         buildUi()
         setContentView(root)
         renderer.setSpec(selected)
-        refreshPanel()
+        val savedLens = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_LENS, null)
+        selectedLens = ContactLenses.all.firstOrNull { it.id == savedLens }
+        selectedLens?.let { lensOpacity = it.defaultOpacity }
+        lensAdapter.select(selectedLens)
+        setTab(if (category == Category.SUNGLASSES) Tab.SUNGLASSES else Tab.EYEGLASSES)
 
         if (hasCameraPermission()) startLive() else showPermissionIntro()
     }
@@ -239,10 +257,12 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
             try {
                 tracker.prepareStill()
                 val bmp = decodePhoto(uri)
-                val pose = tracker.detectStill(bmp)
+                val tracked = tracker.detectStill(bmp)
+                val pose = tracked?.pose
                 val slot = renderer.ring.obtain(bmp.width, bmp.height)
                 Canvas(slot.bitmap!!).drawBitmap(bmp, 0f, 0f, null)
                 slot.pose = pose
+                slot.eyes = tracked?.eyes
                 slot.mirror = false
                 slot.ambient = CameraController.estimateAmbient(bmp)
                 renderer.ring.publish(slot)
@@ -348,20 +368,65 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         updateHeader()
     }
 
-    private fun setCategory(c: Category) {
-        category = c
-        refreshPanel()
-        select(selection[c] ?: FrameCatalog.byCategory(c).first())
+    private fun setTab(t: Tab) {
+        tab = t
+        when (t) {
+            Tab.EYEGLASSES, Tab.SUNGLASSES -> {
+                category = if (t == Tab.SUNGLASSES) Category.SUNGLASSES else Category.EYEGLASSES
+                renderer.lens = null
+                renderer.glassesVisible = true
+                intensityRow.visibility = View.GONE
+                list.adapter = adapter
+                refreshPanel()
+                select(selection[category] ?: FrameCatalog.byCategory(category).first())
+            }
+            Tab.LENSES -> {
+                renderer.glassesVisible = false
+                list.adapter = lensAdapter
+                intensityRow.visibility = if (selectedLens != null) View.VISIBLE else View.GONE
+                applyLens()
+                styleTabs()
+                updateHeader()
+                list.scrollToPosition(lensAdapter.select(selectedLens))
+            }
+        }
+        styleTabs()
+    }
+
+    private fun selectLens(lens: ContactLens?) {
+        selectedLens = lens
+        if (lens != null) lensOpacity = lens.defaultOpacity
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_LENS, lens?.id).apply()
+        lensAdapter.select(lens)
+        intensityRow.visibility = if (lens != null && tab == Tab.LENSES) View.VISIBLE else View.GONE
+        intensitySeek.progress = (lensOpacity * 100f).roundToInt()
+        applyLens()
+        updateHeader()
+    }
+
+    private fun applyLens() {
+        renderer.lensOpacity = lensOpacity
+        renderer.lens = if (tab == Tab.LENSES) selectedLens else null
     }
 
     private fun refreshPanel() {
         adapter.submit(FrameCatalog.byCategory(category), selection[category])
-        styleTab(tabEyeglasses, category == Category.EYEGLASSES)
-        styleTab(tabSunglasses, category == Category.SUNGLASSES)
+        styleTabs()
         updateHeader()
     }
 
+    private fun styleTabs() {
+        styleTab(tabEyeglasses, tab == Tab.EYEGLASSES)
+        styleTab(tabSunglasses, tab == Tab.SUNGLASSES)
+        styleTab(tabLenses, tab == Tab.LENSES)
+    }
+
     private fun updateHeader() {
+        if (tab == Tab.LENSES) {
+            nameView.text = selectedLens?.name ?: getString(R.string.no_lens)
+            subView.text = getString(R.string.lens_sub)
+            return
+        }
         nameView.text = selected.name
         val material = if (selected.rim == com.optitry.app.eyewear.RimStyle.WIRE) getString(R.string.rim_metal) else getString(R.string.rim_acetate)
         val kind = if (selected.category == Category.EYEGLASSES) getString(R.string.eyeglasses) else getString(R.string.sunglasses)
@@ -485,38 +550,64 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
                 cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
             }
         }
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         nameView = text("", 17f, Color.WHITE, bold = true)
         subView = text("", 12f, 0xFFA0A0B0.toInt())
         titles.addView(nameView)
         titles.addView(subView)
-        header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        panel.addView(titles)
+
+        // segmented control: Eyeglasses | Sunglasses | Lenses (contact lenses) - full width so it fits any phone
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = rounded(0x22FFFFFF, 20)
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
-        fun tab(label: String, c: Category) = text(label, 13f, Color.WHITE, bold = true).apply {
+        fun tabView(label: String, t: Tab) = text(label, 13f, Color.WHITE, bold = true).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(14), dp(7), dp(14), dp(7))
-            setOnClickListener { setCategory(c) }
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            maxLines = 1
+            setOnClickListener { setTab(t) }
         }
-        tabEyeglasses = tab(getString(R.string.eyeglasses), Category.EYEGLASSES)
-        tabSunglasses = tab(getString(R.string.sunglasses), Category.SUNGLASSES)
-        tabs.addView(tabEyeglasses)
-        tabs.addView(tabSunglasses)
-        header.addView(tabs)
-        panel.addView(header)
+        tabEyeglasses = tabView(getString(R.string.eyeglasses), Tab.EYEGLASSES)
+        tabSunglasses = tabView(getString(R.string.sunglasses), Tab.SUNGLASSES)
+        tabLenses = tabView(getString(R.string.contact_lenses), Tab.LENSES)
+        for (t in listOf(tabEyeglasses, tabSunglasses, tabLenses)) tabs.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        panel.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         adapter = FrameAdapter { select(it) }
+        lensAdapter = LensAdapter(ContactLenses.all, getString(R.string.no_lens_short)) { selectLens(it) }
         list = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
             adapter = this@MainActivity.adapter
             clipToPadding = false
             overScrollMode = View.OVER_SCROLL_NEVER
         }
-        panel.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(88)).apply { topMargin = dp(12) })
+        panel.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(94)).apply { topMargin = dp(10) })
+
+        // lens strength slider (only while the Lenses tab has a colour selected)
+        intensityRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE }
+        intensityRow.addView(text(getString(R.string.intensity), 12.5f, 0xFFB4B4C0.toInt()))
+        intensitySeek = SeekBar(this).apply {
+            max = 100
+            progress = (lensOpacity * 100f).roundToInt()
+            progressTintList = ColorStateList.valueOf(0xFF9F67FF.toInt())
+            thumbTintList = ColorStateList.valueOf(0xFFFFFFFF.toInt())
+            contentDescription = getString(R.string.intensity)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, value: Int, fromUser: Boolean) {
+                    lensOpacity = maxOf(value, 15) / 100f
+                    intensityValue.text = "${maxOf(value, 15)}%"
+                    if (fromUser) renderer.lensOpacity = lensOpacity
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        intensityRow.addView(intensitySeek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10); marginEnd = dp(10) })
+        intensityValue = text("${(lensOpacity * 100f).roundToInt()}%", 12.5f, Color.WHITE, bold = true)
+        intensityRow.addView(intensityValue)
+        panel.addView(intensityRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
 
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         controls.addView(roundButton(R.drawable.ic_photo_library, getString(R.string.cd_gallery)) {
@@ -583,6 +674,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         const val TAG = "MainActivity"
         const val PREFS = "optitry"
         const val KEY_FRAME = "frame_id"
+        const val KEY_LENS = "lens_id"
         const val MAX_PHOTO_SIDE = 1600
     }
 }

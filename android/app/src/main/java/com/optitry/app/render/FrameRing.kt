@@ -1,6 +1,7 @@
 package com.optitry.app.render
 
 import android.graphics.Bitmap
+import com.optitry.app.core.Eyes
 import com.optitry.app.core.FacePose
 
 /** One camera/photo frame plus the tracking result computed from exactly that frame. */
@@ -8,6 +9,7 @@ class FrameSlot internal constructor() {
     var bitmap: Bitmap? = null
         internal set
     @JvmField var pose: FacePose? = null
+    @JvmField var eyes: Eyes? = null
     @JvmField var ambient: Float = 1f
     @JvmField var mirror: Boolean = true
 }
@@ -32,6 +34,7 @@ class FrameRing {
             slot.bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         }
         slot.pose = null
+        slot.eyes = null
         return slot
     }
 
