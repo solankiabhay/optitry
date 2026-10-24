@@ -18,11 +18,11 @@ class EyewearGeometryTest {
 
     private fun meshesFor(spec: FrameSpec) = EyewearGeometry.build(spec)
 
-    @Test fun catalogHasFiftyPlusFiftyUniqueStyles() {
-        assertEquals(50, FrameCatalog.eyeglasses.size)
-        assertEquals(50, FrameCatalog.sunglasses.size)
-        assertEquals(100, FrameCatalog.all.map { it.id }.toSet().size)
-        assertEquals(100, FrameCatalog.all.map { it.name }.toSet().size)
+    @Test fun catalogHasEightyPlusEightyUniqueStyles() {
+        assertEquals(80, FrameCatalog.eyeglasses.size)
+        assertEquals(80, FrameCatalog.sunglasses.size)
+        assertEquals(160, FrameCatalog.all.map { it.id }.toSet().size)
+        assertEquals(160, FrameCatalog.all.map { it.name }.toSet().size)
         assertTrue(FrameCatalog.eyeglasses.all { it.category == Category.EYEGLASSES })
         assertTrue(FrameCatalog.sunglasses.all { it.category == Category.SUNGLASSES })
     }

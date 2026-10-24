@@ -29,18 +29,44 @@ data class LensShape(
     val taper: Float = 0f,
     val lift: Float = 0f,
     val topBoost: Float = 0f,
-    val noseCut: Float = 0.22f
+    val noseCut: Float = 0.22f,
+    /** 0 = super-ellipse; 6 = hexagon (pointed at the sides), 8 = octagon (flat on every side). Corners are rounded by [corner]. */
+    val facets: Int = 0,
+    val corner: Float = 0.18f
 ) {
+    /** Radius of the unit rounded polygon in direction [t] (circumradius 1, corners softened toward the inscribed circle). */
+    private fun polyRadius(t: Double): Double {
+        val n = facets
+        val sector = 2.0 * Math.PI / n
+        val offset = if (n % 2 == 0 && n != 6) Math.PI / n else 0.0 // octagon: flat edges on the axes; hexagon: a vertex on +x
+        var u = (t - offset - sector / 2.0) % sector
+        if (u < 0) u += sector
+        u -= sector / 2.0
+        val apothem = cos(Math.PI / n)
+        val poly = apothem / cos(u)
+        return poly * (1.0 - corner) + apothem * corner
+    }
+
     /** Counter-clockwise contour of [segments] points around the lens centre, outer side at +x. */
     fun contour(segments: Int): List<FloatArray> {
         val a = width / 2f
         val b = height / 2f
         val e = 2.0 / squareness
+        val rx = if (facets >= 3) polyRadius(0.0) else 1.0
+        val ry = if (facets >= 3) polyRadius(Math.PI / 2.0) else 1.0
         return List(segments) { i ->
             val t = 2.0 * Math.PI * i / segments
             val c = cos(t); val s = sin(t)
-            var x = (a * sign(c) * abs(c).pow(e)).toFloat()
-            var y = (b * sign(s) * abs(s).pow(e)).toFloat()
+            var x: Float
+            var y: Float
+            if (facets >= 3) {
+                val r = polyRadius(t)
+                x = (a * r * c / rx).toFloat()
+                y = (b * r * s / ry).toFloat()
+            } else {
+                x = (a * sign(c) * abs(c).pow(e)).toFloat()
+                y = (b * sign(s) * abs(s).pow(e)).toFloat()
+            }
             x *= 1f + taper * (y / b)
             if (lift != 0f && x > 0f) y += lift * (x / a).pow(2)
             if (noseCut != 0f && x < 0f && y < 0f) x *= 1f - noseCut * (-y / b).coerceIn(0f, 1f).pow(1.2f)
@@ -77,7 +103,7 @@ data class FrameSpec(
     val isTranslucentFrame: Boolean get() = pattern == Pattern.CRYSTAL
 }
 
-/** 50 eyeglasses + 50 sunglasses: generic best-selling style archetypes (not brand-model copies) built from a few silhouettes and finishes. */
+/** 80 eyeglasses + 80 sunglasses: generic best-selling style archetypes (not brand-model copies) built from a few silhouettes and finishes. */
 object FrameCatalog {
     private fun argb(r: Int, g: Int, b: Int) = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
 
@@ -100,6 +126,12 @@ object FrameCatalog {
     private val WAYFARER_SLIM = LensShape(5.3f, 3.9f, 3.0f, taper = 0.08f, lift = 0.04f)
     private val AVIATOR_LARGE = LensShape(5.8f, 5.0f, 2.3f, taper = -0.12f)
     private val PILOT = LensShape(5.5f, 4.7f, 2.8f, taper = -0.08f)
+    private val HEXAGON = LensShape(5.2f, 4.4f, 2.0f, facets = 6, corner = 0.20f)
+    private val OCTAGON = LensShape(5.1f, 4.4f, 2.0f, facets = 8, corner = 0.15f)
+    private val CARAVAN = LensShape(5.7f, 4.6f, 3.6f, taper = -0.07f)
+    private val BIG_ROUND = LensShape(5.3f, 5.0f, 2.0f)
+    private val SQUARE_CLASSIC = LensShape(5.3f, 4.5f, 4.0f)
+    private val MEGA_WAYFARER = LensShape(5.6f, 4.6f, 3.2f, taper = 0.07f, lift = 0.05f)
 
     private val CLEAR = LensTint(argb(190, 215, 225), 0.07f)
     private val BLUE_LIGHT = LensTint(argb(150, 190, 255), 0.13f)
@@ -165,7 +197,38 @@ object FrameCatalog {
         eye(47, "Burgundy Cat-Eye", CATEYE, RimStyle.ACETATE, argb(110, 26, 50)),
         eye(48, "Sky Blue Crystal", SOFT_SQUARE, RimStyle.ACETATE, argb(160, 205, 235), pattern = Pattern.CRYSTAL),
         eye(49, "Matte Brown Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(86, 58, 40)),
-        eye(50, "Two-Tone Navy Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(28, 48, 98), argb(140, 180, 222), Pattern.GRADIENT)
+        eye(50, "Two-Tone Navy Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(28, 48, 98), argb(140, 180, 222), Pattern.GRADIENT),
+        // 51..80: Ray-Ban-style archetypes (hexagon / "Marshal", octagon, square, big round) and the crystal, tortoise and two-tone colourways Indian shops stock
+        eye(51, "Marshal Hexagon Gold", HEXAGON, RimStyle.WIRE, argb(216, 182, 98), metal = true),
+        eye(52, "Hexagon Matte Black", HEXAGON, RimStyle.WIRE, argb(34, 34, 38), metal = true),
+        eye(53, "Hexagon Silver", HEXAGON, RimStyle.WIRE, argb(196, 202, 210), metal = true),
+        eye(54, "Hexagon Tortoise", HEXAGON, RimStyle.ACETATE, argb(120, 62, 26), argb(214, 150, 70), Pattern.TORTOISE),
+        eye(55, "Octagon Gold", OCTAGON, RimStyle.WIRE, argb(214, 178, 94), metal = true),
+        eye(56, "Octagon Crystal Pink", OCTAGON, RimStyle.ACETATE, argb(236, 190, 200), pattern = Pattern.CRYSTAL),
+        eye(57, "Octagon Black", OCTAGON, RimStyle.ACETATE, argb(24, 24, 28)),
+        eye(58, "Square Classic Black", SQUARE_CLASSIC, RimStyle.ACETATE, argb(22, 22, 26)),
+        eye(59, "Square Classic Tortoise", SQUARE_CLASSIC, RimStyle.ACETATE, argb(112, 58, 24), argb(212, 148, 68), Pattern.TORTOISE),
+        eye(60, "Square Classic Navy", SQUARE_CLASSIC, RimStyle.ACETATE, argb(28, 46, 98)),
+        eye(61, "Big Round Black", BIG_ROUND, RimStyle.ACETATE, argb(24, 24, 28)),
+        eye(62, "Big Round Tortoise", BIG_ROUND, RimStyle.ACETATE, argb(104, 56, 24), argb(204, 146, 66), Pattern.TORTOISE),
+        eye(63, "Big Round Crystal Blue", BIG_ROUND, RimStyle.ACETATE, argb(160, 205, 235), pattern = Pattern.CRYSTAL),
+        eye(64, "Crystal Honey Wayfarer", WAYFARER_SLIM, RimStyle.ACETATE, argb(220, 170, 100), pattern = Pattern.CRYSTAL),
+        eye(65, "Crystal Green Round", ROUND, RimStyle.ACETATE, argb(150, 200, 170), pattern = Pattern.CRYSTAL),
+        eye(66, "Crystal Pink Cat-Eye", CATEYE, RimStyle.ACETATE, argb(240, 190, 205), pattern = Pattern.CRYSTAL),
+        eye(67, "Crystal Navy Square", SOFT_SQUARE, RimStyle.ACETATE, argb(60, 80, 140), pattern = Pattern.CRYSTAL),
+        eye(68, "Crystal Brown Oval", MODERN_OVAL, RimStyle.ACETATE, argb(150, 110, 80), pattern = Pattern.CRYSTAL),
+        eye(69, "Two-Tone Teal Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(20, 80, 90), argb(120, 200, 200), Pattern.GRADIENT),
+        eye(70, "Two-Tone Wine Square", SOFT_SQUARE, RimStyle.ACETATE, argb(100, 24, 52), argb(226, 150, 170), Pattern.GRADIENT),
+        eye(71, "Two-Tone Black Crystal", SLIM_RECT, RimStyle.ACETATE, argb(24, 24, 28), argb(190, 200, 208), Pattern.GRADIENT),
+        eye(72, "Two-Tone Navy Sky Round", ROUND, RimStyle.ACETATE, argb(28, 48, 98), argb(140, 180, 222), Pattern.GRADIENT),
+        eye(73, "Red Tortoise Square", SOFT_SQUARE, RimStyle.ACETATE, argb(110, 24, 20), argb(210, 90, 60), Pattern.TORTOISE),
+        eye(74, "Green Tortoise Round", ROUND, RimStyle.ACETATE, argb(30, 70, 50), argb(130, 170, 90), Pattern.TORTOISE),
+        eye(75, "Light Tortoise Cat-Eye", CATEYE, RimStyle.ACETATE, argb(170, 110, 50), argb(240, 200, 130), Pattern.TORTOISE),
+        eye(76, "Dark Tortoise Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(50, 28, 16), argb(150, 100, 50), Pattern.TORTOISE),
+        eye(77, "Gunmetal Hexagon", HEXAGON, RimStyle.WIRE, argb(96, 102, 112), metal = true),
+        eye(78, "Titanium Light Rectangle", SLIM_RECT, RimStyle.WIRE, argb(170, 176, 186), metal = true),
+        eye(79, "Rose Gold Round", ROUND, RimStyle.WIRE, argb(214, 150, 138), metal = true),
+        eye(80, "Matte Grey Square", SOFT_SQUARE, RimStyle.ACETATE, argb(96, 100, 108))
     )
 
     private val DARK = LensTint(argb(24, 28, 34), 0.78f)
@@ -229,7 +292,38 @@ object FrameCatalog {
         sun(47, "Night Drive Yellow", SOFT_SQUARE, RimStyle.ACETATE, argb(24, 24, 28), tint = NIGHT_YELLOW),
         sun(48, "Gold Slim Rectangle", SLIM_RECT, RimStyle.WIRE, argb(214, 178, 94), metal = true, tint = GREEN_G15),
         sun(49, "Gradient Grey Square", SOFT_SQUARE, RimStyle.ACETATE, argb(60, 62, 70), tint = GREY_GRADIENT),
-        sun(50, "Pastel Blue Oval", MODERN_OVAL, RimStyle.ACETATE, argb(150, 190, 220), tint = BLUE_FASHION)
+        sun(50, "Pastel Blue Oval", MODERN_OVAL, RimStyle.ACETATE, argb(150, 190, 220), tint = BLUE_FASHION),
+        // 51..80: Ray-Ban-style archetypes (aviator, caravan, hexagon, octagon, square, mega wayfarer, round metal) in the colours and lenses sold in India
+        sun(51, "Marshal Hexagon Gold G15", HEXAGON, RimStyle.WIRE, argb(214, 178, 94), metal = true, tint = GREEN_G15),
+        sun(52, "Hexagon Silver Mirror", HEXAGON, RimStyle.WIRE, argb(196, 202, 210), metal = true, tint = SILVER_MIRROR),
+        sun(53, "Hexagon Black Shades", HEXAGON, RimStyle.WIRE, argb(30, 30, 34), metal = true, tint = DARK),
+        sun(54, "Hexagon Rose Gold Pink", HEXAGON, RimStyle.WIRE, argb(214, 150, 138), metal = true, tint = ROSE),
+        sun(55, "Octagon Gold Brown", OCTAGON, RimStyle.WIRE, argb(214, 178, 94), metal = true, tint = BROWN),
+        sun(56, "Octagon Black Shades", OCTAGON, RimStyle.ACETATE, argb(22, 22, 26), tint = DARK),
+        sun(57, "Octagon Tortoise Shades", OCTAGON, RimStyle.ACETATE, argb(112, 58, 24), argb(212, 148, 68), Pattern.TORTOISE, tint = BROWN),
+        sun(58, "Caravan Gold G15", CARAVAN, RimStyle.WIRE, argb(210, 176, 94), metal = true, tint = GREEN_G15, bridge = 2.0f),
+        sun(59, "Caravan Gunmetal Blue", CARAVAN, RimStyle.WIRE, argb(92, 98, 108), metal = true, tint = BLUE_MIRROR, bridge = 2.0f),
+        sun(60, "Caravan Black", CARAVAN, RimStyle.WIRE, argb(26, 26, 30), metal = true, tint = DARK, bridge = 2.0f),
+        sun(61, "Classic Aviator Gold G15", AVIATOR_LARGE, RimStyle.WIRE, argb(214, 180, 98), metal = true, tint = GREEN_G15, bridge = 2.1f),
+        sun(62, "Aviator Gold Brown", AVIATOR_LARGE, RimStyle.WIRE, argb(210, 176, 94), metal = true, tint = BROWN, bridge = 2.1f),
+        sun(63, "Aviator Silver Blue Mirror", AVIATOR_LARGE, RimStyle.WIRE, argb(196, 202, 210), metal = true, tint = BLUE_MIRROR, bridge = 2.1f),
+        sun(64, "Square Classic Black Shades", SQUARE_CLASSIC, RimStyle.ACETATE, argb(20, 20, 24), tint = DARK),
+        sun(65, "Square Classic Tortoise Shades", SQUARE_CLASSIC, RimStyle.ACETATE, argb(104, 56, 24), argb(204, 146, 66), Pattern.TORTOISE, tint = BROWN),
+        sun(66, "Square Navy Mirror", SQUARE_CLASSIC, RimStyle.ACETATE, argb(28, 46, 98), tint = BLUE_MIRROR),
+        sun(67, "Big Round Black Shades", BIG_ROUND, RimStyle.ACETATE, argb(22, 22, 26), tint = DARK),
+        sun(68, "Big Round Tortoise Brown", BIG_ROUND, RimStyle.ACETATE, argb(112, 58, 24), argb(212, 148, 68), Pattern.TORTOISE, tint = BROWN),
+        sun(69, "Big Round Crystal Brown", BIG_ROUND, RimStyle.ACETATE, argb(220, 170, 100), pattern = Pattern.CRYSTAL, tint = BROWN),
+        sun(70, "Crystal Blue Wayfarer Shades", WAYFARER, RimStyle.ACETATE, argb(160, 205, 235), pattern = Pattern.CRYSTAL, tint = BLUE_FASHION),
+        sun(71, "Crystal Pink Cat-Eye Shades", CATEYE, RimStyle.ACETATE, argb(240, 190, 205), pattern = Pattern.CRYSTAL, tint = ROSE),
+        sun(72, "Crystal Honey Square Shades", SOFT_SQUARE, RimStyle.ACETATE, argb(220, 170, 100), pattern = Pattern.CRYSTAL, tint = BROWN),
+        sun(73, "Two-Tone Navy Wayfarer Shades", WAYFARER, RimStyle.ACETATE, argb(28, 48, 98), argb(140, 180, 222), Pattern.GRADIENT, tint = BLUE_MIRROR),
+        sun(74, "Two-Tone Black Crystal Shades", WAYFARER, RimStyle.ACETATE, argb(24, 24, 28), argb(190, 200, 208), Pattern.GRADIENT, tint = DARK),
+        sun(75, "Two-Tone Teal Browline Shades", BROWLINE, RimStyle.ACETATE, argb(20, 80, 90), argb(120, 200, 200), Pattern.GRADIENT, tint = GREEN_G15),
+        sun(76, "Mega Wayfarer Black", MEGA_WAYFARER, RimStyle.ACETATE, argb(20, 20, 24), tint = DARK),
+        sun(77, "Mega Wayfarer Havana", MEGA_WAYFARER, RimStyle.ACETATE, argb(104, 56, 24), argb(204, 146, 66), Pattern.TORTOISE, tint = BROWN),
+        sun(78, "Mega Wayfarer Crystal Grey", MEGA_WAYFARER, RimStyle.ACETATE, argb(170, 176, 184), pattern = Pattern.CRYSTAL, tint = GREY_GRADIENT),
+        sun(79, "Round Metal Gold Blue", ROUND, RimStyle.WIRE, argb(216, 182, 98), metal = true, tint = BLUE_MIRROR),
+        sun(80, "Round Metal Silver Grey", ROUND, RimStyle.WIRE, argb(196, 202, 210), metal = true, tint = GREY_GRADIENT)
     )
 
     val all: List<FrameSpec> = eyeglasses + sunglasses
