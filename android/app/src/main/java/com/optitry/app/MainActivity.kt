@@ -3,6 +3,7 @@ package com.optitry.app
 import android.Manifest
 import android.content.ContentValues
 import android.content.res.ColorStateList
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -34,6 +35,7 @@ import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
@@ -50,12 +52,17 @@ import com.optitry.app.core.ContactLens
 import com.optitry.app.core.ContactLenses
 import com.optitry.app.eyewear.Category
 import com.optitry.app.eyewear.FrameCatalog
+import com.optitry.app.eyewear.FramePhotoAnalyzer
+import com.optitry.app.eyewear.MyFrameStore
+import com.optitry.app.eyewear.PhotoResult
 import com.optitry.app.eyewear.FrameSpec
 import com.optitry.app.render.GlassesRenderer
 import com.optitry.app.render.TryOnGlView
 import com.optitry.app.tracking.FaceTracker
+import com.optitry.app.ui.AddFrameView
 import com.optitry.app.ui.FrameAdapter
 import com.optitry.app.ui.LensAdapter
+import java.io.File
 import java.io.OutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -107,6 +114,13 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private val selection = HashMap<Category, FrameSpec>()
     private var selected: FrameSpec = FrameCatalog.eyeglasses.first()
     private var pendingSave: Bitmap? = null
+    private lateinit var myStore: MyFrameStore
+    private val myFrames = ArrayList<FrameSpec>()
+    private var addView: AddFrameView? = null
+    private var pendingFramePhoto: Bitmap? = null
+    private val closeAddBack = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { closeAddFrame() }
+    }
     private var firstFrameTimeout: Runnable? = null
 
     // ---- activity-result launchers -------------------------------------------------------------------
@@ -122,6 +136,9 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private val pickPhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) enterPhotoMode(uri)
     }
+    private val pickFramePhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) loadFramePhoto(uri)
+    }
 
     // ---- lifecycle -------------------------------------------------------------------------------------
 
@@ -132,8 +149,11 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         )
         super.onCreate(savedInstanceState)
 
+        myStore = MyFrameStore(File(filesDir, "my_frames.txt"))
+        try { myFrames.addAll(myStore.load().asReversed()) } catch (e: Exception) { Log.e(TAG, "could not read saved frames", e) }
+        onBackPressedDispatcher.addCallback(this, closeAddBack)
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FRAME, null)
-        FrameCatalog.all.firstOrNull { it.id == saved }?.let { selected = it; category = it.category }
+        (myFrames + FrameCatalog.all).firstOrNull { it.id == saved }?.let { selected = it; category = it.category }
         selection[Category.EYEGLASSES] = if (selected.category == Category.EYEGLASSES) selected else FrameCatalog.eyeglasses.first()
         selection[Category.SUNGLASSES] = if (selected.category == Category.SUNGLASSES) selected else FrameCatalog.sunglasses.first()
 
@@ -378,7 +398,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
                 intensityRow.visibility = View.GONE
                 list.adapter = adapter
                 refreshPanel()
-                select(selection[category] ?: FrameCatalog.byCategory(category).first())
+                select(selection[category] ?: framesFor(category).first())
             }
             Tab.LENSES -> {
                 renderer.glassesVisible = false
@@ -410,7 +430,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     }
 
     private fun refreshPanel() {
-        adapter.submit(FrameCatalog.byCategory(category), selection[category])
+        adapter.submit(framesFor(category), selection[category], myFrames.map { it.id }.toSet())
         styleTabs()
         updateHeader()
     }
@@ -431,6 +451,88 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         val material = if (selected.rim == com.optitry.app.eyewear.RimStyle.WIRE) getString(R.string.rim_metal) else getString(R.string.rim_acetate)
         val kind = if (selected.category == Category.EYEGLASSES) getString(R.string.eyeglasses) else getString(R.string.sunglasses)
         subView.text = "$kind · $material"
+    }
+
+    // ---- the shop's own frames (photo -> 3D) ----------------------------------------------------------------
+
+    private fun framesFor(c: Category): List<FrameSpec> = myFrames.filter { it.category == c } + FrameCatalog.byCategory(c)
+
+    private fun showAddFrame() {
+        val v = addView ?: AddFrameView(this, object : AddFrameView.Callbacks {
+            override fun onPickPhoto() { pickFramePhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            override fun onSubmit(request: AddFrameView.Request) { createFrame(request) }
+            override fun onCancel() { closeAddFrame() }
+        }).also { addView = it; root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        v.reset()
+        pendingFramePhoto = null
+        v.visibility = View.VISIBLE
+        v.bringToFront()
+        closeAddBack.isEnabled = true
+    }
+
+    private fun closeAddFrame() {
+        addView?.visibility = View.GONE
+        pendingFramePhoto = null
+        closeAddBack.isEnabled = false
+    }
+
+    private fun loadFramePhoto(uri: Uri) {
+        io.execute {
+            try {
+                val bmp = decodePhoto(uri)
+                main.post { pendingFramePhoto = bmp; addView?.setPreview(bmp) }
+            } catch (e: Throwable) {
+                Log.e(TAG, "frame photo failed", e)
+                main.post { addView?.setMessage(getString(R.string.photo_load_failed), true) }
+            }
+        }
+    }
+
+    private fun createFrame(req: AddFrameView.Request) {
+        val bmp = pendingFramePhoto ?: return
+        val view = addView ?: return
+        view.setBusy(true)
+        io.execute {
+            val outcome: PhotoResult = try {
+                val longest = max(bmp.width, bmp.height)
+                val scale = min(1f, 720f / longest)
+                val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * scale).roundToInt()), max(1, (bmp.height * scale).roundToInt()), true) else bmp
+                val px = IntArray(small.width * small.height)
+                small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
+                FramePhotoAnalyzer.analyze(px, small.width, small.height, "my-${System.currentTimeMillis()}", req.name, req.category, req.hints, req.pattern)
+            } catch (e: Throwable) {
+                Log.e(TAG, "frame analysis failed", e)
+                PhotoResult.Fail(e.message ?: e.javaClass.simpleName)
+            }
+            main.post {
+                when (outcome) {
+                    is PhotoResult.Ok -> {
+                        try { myStore.add(outcome.spec) } catch (e: Throwable) { Log.e(TAG, "could not save frame", e) }
+                        myFrames.add(0, outcome.spec)
+                        selection[outcome.spec.category] = outcome.spec
+                        closeAddFrame()
+                        setTab(if (outcome.spec.category == Category.SUNGLASSES) Tab.SUNGLASSES else Tab.EYEGLASSES)
+                        toast(getString(R.string.added_ok, outcome.summary))
+                    }
+                    is PhotoResult.Fail -> { view.setBusy(false); view.setMessage(outcome.reason, true) }
+                }
+            }
+        }
+    }
+
+    private fun confirmDelete(spec: FrameSpec) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.delete_title)
+            .setMessage(getString(R.string.delete_message, spec.name))
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                io.execute { try { myStore.remove(spec.id) } catch (e: Throwable) { Log.e(TAG, "delete failed", e) } }
+                myFrames.removeAll { it.id == spec.id }
+                if (selection[spec.category]?.id == spec.id) selection[spec.category] = FrameCatalog.byCategory(spec.category).first()
+                if (selected.id == spec.id) select(selection[spec.category]!!)
+                refreshPanel()
+            }
+            .show()
     }
 
     // ---- status overlay -------------------------------------------------------------------------------------
@@ -575,7 +677,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         for (t in listOf(tabEyeglasses, tabSunglasses, tabLenses)) tabs.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         panel.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
-        adapter = FrameAdapter { select(it) }
+        adapter = FrameAdapter({ select(it) }, { showAddFrame() }, { confirmDelete(it) })
         lensAdapter = LensAdapter(ContactLenses.all, getString(R.string.no_lens_short)) { selectLens(it) }
         list = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
