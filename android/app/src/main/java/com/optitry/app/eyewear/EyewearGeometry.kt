@@ -80,6 +80,7 @@ object EyewearGeometry {
             addHinge(frame, side, hingeX, hingeY, spec)
         }
         addBridge(frame, spec, right, left)
+        if (spec.doubleBridge) addBrowBar(frame, spec, right, left)
         addNosePads(frame, spec, right, left)
         return GlassesMesh(frame.build(), lens.build(), hingeX, hingeY)
     }
@@ -183,6 +184,21 @@ object EyewearGeometry {
             Vec3(p0.x * a + ctrl.x * bq + p2.x * c, p0.y * a + ctrl.y * bq + p2.y * c, p0.z * a + ctrl.z * bq + p2.z * c)
         }
         val profile = if (spec.rim == RimStyle.ACETATE) Profiles.roundedRect(0.40f, spec.rimDepth * 0.9f, 0.14f, 3) else Profiles.circle(0.055f, 8)
+        Sweeper.sweep(mb, pts, false, profile, pts.map { Vec3(0f, 1f, 0f) }, null, null, PART_BODY, true)
+    }
+
+    /** Double-bridge (pilot) brow bar: a straight bar level with the top of the rims, spanning the gap between the lenses. */
+    private fun addBrowBar(mb: MeshBuilder, spec: FrameSpec, right: Lens, left: Lens) {
+        val yTop = max(right.rimPath.maxOf { it.y }, left.rimPath.maxOf { it.y })
+        // innermost top-edge points (within 1.5 mm of the top) give the bar's ends, tucked into the rims
+        val xr = right.rimPath.filter { it.y >= yTop - 0.15f }.minOf { it.x }
+        val xl = left.rimPath.filter { it.y >= yTop - 0.15f }.maxOf { it.x }
+        val half = min(abs(xr), abs(xl)) + 0.25f
+        val thick = if (spec.rim == RimStyle.ACETATE) spec.rimWidth * 0.95f else 0.11f
+        val y = yTop - thick * 0.45f
+        val z = frameZ(spec, 0f) + 0.10f
+        val pts = (0..10).map { i -> Vec3(-half + 2f * half * i / 10f, y, z) }
+        val profile = if (spec.rim == RimStyle.ACETATE) Profiles.roundedRect(thick, spec.rimDepth * 0.9f, min(thick, spec.rimDepth) * 0.32f, 3) else Profiles.circle(0.055f, 8)
         Sweeper.sweep(mb, pts, false, profile, pts.map { Vec3(0f, 1f, 0f) }, null, null, PART_BODY, true)
     }
 

@@ -88,39 +88,55 @@ object FramePhotoAnalyzer {
         }
         val solidLens = leftIdx < 0 || rightIdx < 0
 
-        val apW: Float; val apH: Float; val fill: Float; val taperRaw: Float
+        // per-lens outline in image space: radius (px) from the box centre at RADIAL_SAMPLES angles (0 = image right, counter-clockwise)
+        val profR: FloatArray; val profL: FloatArray
+        val centreR: FloatArray; val centreL: FloatArray
+        val taperRaw: Float
         var liftPx = 0f
-        var rimPx: Float; var topT = 0f
+        val rimPx: Float; var topT = 0f
         val gapPx: Float
+        var doubleBridge = false
         val colourSamples = ArrayList<Sample>()
         var lensTintColour = 0
 
         if (!solidLens) {
             val l = holes[leftIdx]; val r = holes[rightIdx]
             val lLab = leftIdx + 1; val rLab = rightIdx + 1
-            apW = (l.w + r.w) / 2f; apH = (l.h + r.h) / 2f
-            fill = (l.area.toFloat() / (l.w * l.h) + r.area.toFloat() / (r.w * r.h)) / 2f
+            val hullR = hullOf(boundary(holeLabels, w, h, rLab, r)); val hullL = hullOf(boundary(holeLabels, w, h, lLab, l))
+            centreR = floatArrayOf((r.x0 + r.x1) / 2f, (r.y0 + r.y1) / 2f); centreL = floatArrayOf((l.x0 + l.x1) / 2f, (l.y0 + l.y1) / 2f)
+            profR = radii(hullR, centreR); profL = radii(hullL, centreL)
             taperRaw = (taperOf(holeLabels, w, rLab, r) + taperOf(holeLabels, w, lLab, l, mirror = true)) / 2f
             liftPx = liftOf(holeLabels, w, rLab, r)
             gapPx = (r.x0 - (l.x1 + 1)).toFloat()
-            val side = ArrayList<Float>(); val up = ArrayList<Float>()
-            fun thick(lab: Int, c: Comp, dx: Int, dy: Int): Float {
-                var x = c.cx.roundToInt(); var y = c.cy.roundToInt()
-                if (dx != 0) y = (c.y0 + c.y1) / 2 else x = (c.x0 + c.x1) / 2
-                while (x in 0 until w && y in 0 until h && holeLabels[y * w + x] == lab) { x += dx; y += dy }
-                var n = 0
-                while (x in 0 until w && y in 0 until h && mask[y * w + x]) { n++; x += dx; y += dy }
-                return n.toFloat()
+            // rim thickness from the top, bottom and nose side (the arms seen through the lens make the outer side unreliable)
+            val topS = ArrayList<Float>(); val rimS = ArrayList<Float>()
+            for ((c, lab, inner) in listOf(Triple(r, rLab, -1), Triple(l, lLab, 1))) {
+                for (f in floatArrayOf(0.30f, 0.50f, 0.70f)) {
+                    val xc = (c.x0 + c.w * f).toInt()
+                    var yt = c.y0; while (yt <= c.y1 && holeLabels[yt * w + xc] != lab) yt++
+                    var yb = c.y1; while (yb >= c.y0 && holeLabels[yb * w + xc] != lab) yb--
+                    if (yt <= c.y1) topS += run(mask, w, h, xc, yt - 1, 0, -1)
+                    if (yb >= c.y0) rimS += run(mask, w, h, xc, yb + 1, 0, 1)
+                    val yr = (c.y0 + c.h * f).toInt()
+                    var xi = if (inner < 0) c.x0 else c.x1
+                    while (xi in c.x0..c.x1 && holeLabels[yr * w + xi] != lab) xi -= inner
+                    if (xi in c.x0..c.x1) rimS += run(mask, w, h, xi + inner, yr, inner, 0)
+                }
             }
-            side += thick(rLab, r, 1, 0); side += thick(lLab, l, -1, 0)
-            side += thick(rLab, r, 0, 1); side += thick(lLab, l, 0, 1)
-            up += thick(rLab, r, 0, -1); up += thick(lLab, l, 0, -1)
-            rimPx = max(2f, median(side)); topT = median(up)
-            collectRimColours(px, mask, holeLabels, w, h, rLab, r, rimPx, colourSamples)
-            collectRimColours(px, mask, holeLabels, w, h, lLab, l, rimPx, colourSamples)
+            rimPx = max(2f, median(rimS.filter { it > 0f })); topT = median(topS.filter { it > 0f })
+            // a small closed opening above the nose bridge = double-bridge (pilot) frame with a brow bar
+            var centre = -1
+            for ((k, c) in holes.withIndex()) {
+                if (k == leftIdx || k == rightIdx) continue
+                if (c.area >= bw * bh * 0.002f && abs(c.cx - cxMid) <= bw * 0.12f && c.cy < (l.cy + r.cy) / 2f && c.area < 0.4f * min(l.area, r.area))
+                    if (centre < 0 || c.area > holes[centre].area) centre = k
+            }
+            doubleBridge = centre >= 0
+            collectRimColours(px, mask, centreR, profR, rimPx, w, h, colourSamples)
+            collectRimColours(px, mask, centreL, profL, rimPx, w, h, colourSamples)
         } else {
             // dark / tinted lenses fill the rim: treat each half of the frame as one blob
-            var bx = (cxMid).roundToInt(); var best = Int.MAX_VALUE
+            var bx = cxMid.roundToInt(); var best = Int.MAX_VALUE
             for (x in (cxMid - bw * 0.08f).roundToInt()..(cxMid + bw * 0.08f).roundToInt()) {
                 var cnt = 0; for (y in y0..y1) if (mask[y * w + x]) cnt++
                 if (cnt < best) { best = cnt; bx = x }
@@ -134,8 +150,20 @@ object FramePhotoAnalyzer {
             if (lc.area == 0 || rc.area == 0) return PhotoResult.Fail("Frame ki shape samajh nahi aayi. Saaf photo lo.")
             val est = max(2f, (lc.w + rc.w) / 2f * 0.06f)
             rimPx = est
-            apW = max(4f, (lc.w + rc.w) / 2f - 2 * est); apH = max(4f, (lc.h + rc.h) / 2f - 2 * est)
-            fill = (lc.area.toFloat() / (lc.w * lc.h) + rc.area.toFloat() / (rc.w * rc.h)) / 2f
+            centreR = floatArrayOf((rc.x0 + rc.x1) / 2f, (rc.y0 + rc.y1) / 2f); centreL = floatArrayOf((lc.x0 + lc.x1) / 2f, (lc.y0 + lc.y1) / 2f)
+            fun blobHull(c: Comp, right: Boolean): Array<FloatArray> {
+                val pts = ArrayList<IntArray>()
+                for (y in c.y0..c.y1) for (x in c.x0..c.x1) {
+                    if (!mask[y * w + x] || (x < bx) == right) continue
+                    val edge = x == c.x0 || x == c.x1 || y == c.y0 || y == c.y1 ||
+                        !mask[y * w + x - 1] || !mask[y * w + x + 1] || !mask[(y - 1) * w + x] || !mask[(y + 1) * w + x]
+                    if (edge) pts += intArrayOf(x, y)
+                }
+                return hullOf(pts)
+            }
+            // the blob includes the rim: shrink every radius by the estimated rim thickness to get the lens opening
+            profR = radii(blobHull(rc, true), centreR).map { max(it - est, it * 0.5f) }.toFloatArray()
+            profL = radii(blobHull(lc, false), centreL).map { max(it - est, it * 0.5f) }.toFloatArray()
             taperRaw = 0f
             gapPx = max(0f, (rc.x0 - (lc.x1 + 1)).toFloat()) + 2 * est
             val lensSamples = ArrayList<Int>()
@@ -145,37 +173,51 @@ object FramePhotoAnalyzer {
                 for (yy in cy - dy..cy + dy step max(1, dy / 3)) for (xx in cx - dx..cx + dx step max(1, dx / 3)) lensSamples += px[yy * w + xx]
             }
             lensTintColour = medianColour(lensSamples)
-            // rim colour: pixels just inside the outline, sampled along rays from each blob centre
             for (c in listOf(lc, rc)) rayRimColours(px, mask, w, h, c.cx.roundToInt(), c.cy.roundToInt(), est, colourSamples)
         }
 
-        // ---- scale: px per mm ----
+        // ---- scale: px per mm. frame width = 2 lenses + bridge gap + 2 rim walls ----
         var pxPerMm = bw / DEFAULT_FRONT_MM
         if (hints.lensMm != null) {
             val bridge = hints.bridgeMm ?: 18f
-            repeat(3) {
-                val rimMm = rimPx / pxPerMm
-                pxPerMm = bw / (2 * hints.lensMm + bridge + 4 * rimMm)
-            }
+            repeat(3) { pxPerMm = bw / (2 * hints.lensMm + bridge + 2 * (rimPx / pxPerMm)) }
         }
         val rimMm = rimPx / pxPerMm
-        val apWmm = apW / pxPerMm; val apHmm = apH / pxPerMm
 
-        // ---- lens outline ----
-        val widthCm = ((apWmm + rimMm) / 10f).coerceIn(4.7f, 5.8f)
-        val heightCm = ((apHmm + rimMm) / 10f).coerceIn(3.6f, 5.1f)
-        val squareness = solveSquareness(fill).coerceIn(2.0f, 4.2f)
+        // ---- lens outline (model space: outer side +x, y up, cm). The left lens is the mirror image of the right one. ----
+        val n = RADIAL_SAMPLES
+        val outline = FloatArray(n)
+        for (k in 0 until n) {
+            val rr = profR[k]; val ll = profL[(n / 2 - k + n) % n]
+            outline[k] = (rr + ll) / 2f
+        }
+        val smooth = FloatArray(n) { k -> (outline[(k + n - 2) % n] + 2 * outline[(k + n - 1) % n] + 3 * outline[k] + 2 * outline[(k + 1) % n] + outline[(k + 2) % n]) / 9f }
+        var cm = FloatArray(n) { smooth[it] / pxPerMm / 10f }
+        fun extent(f: (Float, Float) -> Float): Float {
+            var lo = 1e9f; var hi = -1e9f
+            for (k in 0 until n) { val t = 2.0 * PI * k / n; val v = f((cm[k] * cos(t)).toFloat(), (cm[k] * sin(t)).toFloat()); if (v < lo) lo = v; if (v > hi) hi = v }
+            return hi - lo
+        }
+        var widthCm = extent { x, _ -> x }; var heightCm = extent { _, y -> y }
+        // keep the size inside the range the 3D engine is tested for
+        val fw = (widthCm.coerceIn(4.4f, 5.9f)) / widthCm
+        val fh = (heightCm.coerceIn(3.4f, 5.3f)) / heightCm
+        val f = if (fw < 1f || fh < 1f) min(fw, fh) else max(fw, fh)
+        if (f != 1f) cm = FloatArray(n) { cm[it] * f }
+        widthCm = extent { x, _ -> x }; heightCm = extent { _, y -> y }
+
+        val squareness = solveSquareness(areaRatio(cm, widthCm, heightCm)).coerceIn(2.0f, 6.0f)
         val taper = taperRaw.coerceIn(-0.13f, 0.10f).let { if (abs(it) < 0.02f) 0f else it }
-        val liftCm = (liftPx / pxPerMm / 10f) / 0.4f // outer corner rises by lift*(outer share^2); empirical factor for the narrower outer band
+        val liftCm = (liftPx / pxPerMm / 10f) / 0.4f
         val lift = if (liftCm < 0.08f) 0f else liftCm.coerceIn(0f, 0.5f)
         val rimIsAcetate = rimMm >= 2.8f
         val rimStyle = if (rimIsAcetate) RimStyle.ACETATE else RimStyle.WIRE
         val rimCm = if (rimIsAcetate) (rimMm / 10f).coerceIn(0.34f, 0.62f) else (rimMm / 10f).coerceIn(0.15f, 0.22f)
-        val topBoost = if (!solidLens && rimIsAcetate && rimPx > 0f) ((topT / rimPx) - 1f).let { if (it < 0.3f) 0f else it.coerceIn(0f, 1.0f) } else 0f
-        val bridgeCm = ((gapPx / pxPerMm - rimMm) / 10f).coerceIn(1.7f, 2.1f)
+        val topBoost = if (!solidLens && rimIsAcetate && rimPx > 0f && !doubleBridge) safeTopBoost(heightCm, rimCm, ((topT / rimPx) - 1f).let { if (it < 0.3f) 0f else it.coerceIn(0f, 1.0f) }) else 0f
+        val bridgeCm = (gapPx / pxPerMm / 10f).coerceIn(1.5f, 2.2f)
 
         // ---- colour & pattern ----
-        val look = decideLook(colourSamples, choice, rimStyle)
+        val look = decideLook(colourSamples, choice, rimStyle, lum(bg))
         val tint = when {
             category == Category.EYEGLASSES -> LensTint(rgb(190, 215, 225), 0.07f)
             solidLens && lensTintColour != 0 -> LensTint(lensTintColour or (0xFF shl 24), (0.5f + 0.4f * (1f - lum(lensTintColour) / 255f)).coerceIn(0.55f, 0.85f))
@@ -184,15 +226,83 @@ object FramePhotoAnalyzer {
 
         val spec = FrameSpec(
             id = id, name = name, category = category,
-            shape = LensShape(widthCm, heightCm, squareness, taper = taper, lift = lift, topBoost = topBoost),
+            shape = LensShape(widthCm, heightCm, squareness, taper = taper, lift = lift, topBoost = topBoost, radial = cm),
             rim = rimStyle, frameColor = look.base, accentColor = look.accent, pattern = look.pattern,
-            metallic = rimStyle == RimStyle.WIRE, tint = tint, rimWidth = rimCm, bridgeWidth = bridgeCm
+            metallic = rimStyle == RimStyle.WIRE, tint = tint, rimWidth = rimCm, bridgeWidth = bridgeCm, doubleBridge = doubleBridge
         )
-        val summary = "Lens %.0f x %.0f mm, bridge %.0f mm, rim %.1f mm (%s), %s".format(
-            apWmm, apHmm, (gapPx / pxPerMm - rimMm).coerceAtLeast(0f), rimMm,
-            if (rimIsAcetate) "plastic" else "metal", look.pattern.name.lowercase()
+        val summary = "Lens %.0f x %.0f mm, bridge %.0f mm, rim %.1f mm (%s)%s, %s".format(
+            widthCm * 10f, heightCm * 10f, bridgeCm * 10f, rimMm, if (rimIsAcetate) "plastic" else "metal",
+            if (doubleBridge) ", double bridge" else "", look.pattern.name.lowercase()
         )
         return PhotoResult.Ok(spec, summary)
+    }
+
+    /**
+     * A thick browline rim on a tall lens would climb above the brows. The top of the frame is
+     * lens centre + half the height + (path offset + profile half) = rim * (1 + boost); keep that below 5.75 cm.
+     */
+    fun safeTopBoost(heightCm: Float, rimCm: Float, boost: Float): Float {
+        val room = (5.75f - EyewearGeometry.LENS_CENTER_Y - heightCm / 2f) / rimCm - 1f
+        return boost.coerceAtMost(max(0f, room))
+    }
+
+    // ------------------------------------------------------------------------------------------------ outline helpers
+
+    /** Pixels of hole [lab] that touch something that is not the hole. */
+    private fun boundary(labels: IntArray, w: Int, h: Int, lab: Int, c: Comp): List<IntArray> {
+        val out = ArrayList<IntArray>()
+        for (y in c.y0..c.y1) for (x in c.x0..c.x1) {
+            if (labels[y * w + x] != lab) continue
+            if (x == 0 || y == 0 || x == w - 1 || y == h - 1 ||
+                labels[y * w + x - 1] != lab || labels[y * w + x + 1] != lab || labels[(y - 1) * w + x] != lab || labels[(y + 1) * w + x] != lab) out += intArrayOf(x, y)
+        }
+        return out
+    }
+
+    /** Convex hull (Andrew's monotone chain), counter-clockwise in a y-up sense; [pts] are (x, y) pixels. */
+    private fun hullOf(pts: List<IntArray>): Array<FloatArray> {
+        if (pts.size < 3) return Array(pts.size) { floatArrayOf(pts[it][0].toFloat(), pts[it][1].toFloat()) }
+        val sorted = pts.sortedWith(compareBy({ it[0] }, { it[1] }))
+        fun cross(o: IntArray, a: IntArray, b: IntArray): Long = (a[0] - o[0]).toLong() * (b[1] - o[1]) - (a[1] - o[1]).toLong() * (b[0] - o[0])
+        val hull = ArrayList<IntArray>()
+        for (p in sorted) { while (hull.size >= 2 && cross(hull[hull.size - 2], hull[hull.size - 1], p) <= 0) hull.removeAt(hull.size - 1); hull += p }
+        val lower = hull.size + 1
+        for (i in sorted.size - 2 downTo 0) { val p = sorted[i]; while (hull.size >= lower && cross(hull[hull.size - 2], hull[hull.size - 1], p) <= 0) hull.removeAt(hull.size - 1); hull += p }
+        hull.removeAt(hull.size - 1)
+        return Array(hull.size) { floatArrayOf(hull[it][0].toFloat(), hull[it][1].toFloat()) }
+    }
+
+    /** Distance from [c] to the hull boundary along [RADIAL_SAMPLES] directions (image space, y flipped so 90 degrees is "up"). */
+    private fun radii(hull: Array<FloatArray>, c: FloatArray): FloatArray = FloatArray(RADIAL_SAMPLES) { k ->
+        val t = 2.0 * PI * k / RADIAL_SAMPLES
+        rayHull(c[0], c[1], cos(t).toFloat(), -sin(t).toFloat(), hull)
+    }
+
+    private fun rayHull(cx: Float, cy: Float, dx: Float, dy: Float, hull: Array<FloatArray>): Float {
+        var best = 0f
+        for (i in hull.indices) {
+            val a = hull[i]; val b = hull[(i + 1) % hull.size]
+            val ex = b[0] - a[0]; val ey = b[1] - a[1]
+            val den = dx * ey - dy * ex
+            if (abs(den) < 1e-6f) continue
+            val t = ((a[0] - cx) * ey - (a[1] - cy) * ex) / den
+            val u = ((a[0] - cx) * dy - (a[1] - cy) * dx) / den
+            if (t > best && u >= -1e-3f && u <= 1.001f) best = t
+        }
+        return best
+    }
+
+    /** Area of the outline as a share of its bounding box (feeds [solveSquareness], reported for information). */
+    private fun areaRatio(r: FloatArray, w: Float, h: Float): Float {
+        var area = 0.0
+        for (k in r.indices) { val t = 2.0 * PI / r.size; area += 0.5 * r[k] * r[(k + 1) % r.size] * sin(t) }
+        return (area / (w * h).coerceAtLeast(1e-6f)).toFloat().coerceIn(0.5f, 1f)
+    }
+
+    private fun run(mask: BooleanArray, w: Int, h: Int, x: Int, y: Int, dx: Int, dy: Int): Float {
+        var cx = x; var cy = y; var n = 0
+        while (cx in 0 until w && cy in 0 until h && mask[cy * w + cx]) { n++; cx += dx; cy += dy }
+        return n.toFloat()
     }
 
     // ------------------------------------------------------------------------------------------------ geometry
@@ -244,21 +354,14 @@ object FramePhotoAnalyzer {
 
     private class Look(val base: Int, val accent: Int, val pattern: Pattern)
 
-    private fun collectRimColours(px: IntArray, mask: BooleanArray, labels: IntArray, w: Int, h: Int, lab: Int, c: Comp, rimPx: Float, out: MutableList<Sample>) {
-        val cx = c.cx; val cy = c.cy
-        for (k in 0 until 36) {
-            val a = 2.0 * PI * k / 36
-            val dx = cos(a).toFloat(); val dy = sin(a).toFloat()
-            var t = 0f
-            while (true) {
-                val x = (cx + dx * t).roundToInt(); val y = (cy + dy * t).roundToInt()
-                if (x !in 0 until w || y !in 0 until h) break
-                if (labels[y * w + x] != lab) break
-                t += 1f
-            }
+    /** Samples the rim just outside the lens outline (so arms seen through the lens never pollute the colour). */
+    private fun collectRimColours(px: IntArray, mask: BooleanArray, centre: FloatArray, prof: FloatArray, rimPx: Float, w: Int, h: Int, out: MutableList<Sample>) {
+        for (k in 0 until RADIAL_SAMPLES step 2) {
+            val t = 2.0 * PI * k / RADIAL_SAMPLES
+            val dx = cos(t).toFloat(); val dy = -sin(t).toFloat()
             for (f in floatArrayOf(0.35f, 0.55f, 0.75f)) {
-                val tt = t + rimPx * f
-                val x = (cx + dx * tt).roundToInt(); val y = (cy + dy * tt).roundToInt()
+                val d = prof[k] + rimPx * f
+                val x = (centre[0] + dx * d).roundToInt(); val y = (centre[1] + dy * d).roundToInt()
                 if (x in 0 until w && y in 0 until h && mask[y * w + x]) out += Sample(px[y * w + x], dy < -0.5f, dy > 0.5f)
             }
         }
@@ -283,7 +386,7 @@ object FramePhotoAnalyzer {
         }
     }
 
-    private fun decideLook(samples: List<Sample>, choice: PatternChoice, rim: RimStyle): Look {
+    private fun decideLook(samples: List<Sample>, choice: PatternChoice, rim: RimStyle, bgLum: Float): Look {
         if (samples.isEmpty()) return Look(rgb(24, 24, 28), rgb(24, 24, 28), Pattern.SOLID)
         val all = samples.map { it.colour }
         val med = medianColour(all)
@@ -301,7 +404,10 @@ object FramePhotoAnalyzer {
         val twoToneDist = colourDist(topMed, botMed)
         val tortoiseAuto = rim == RimStyle.ACETATE && brownish && std >= 18f
         val twoToneAuto = !tortoiseAuto && twoToneDist > 90f
+        // smoky/clear plastic photographed on a light background: grey, low saturation, with shading and highlights
+        val crystalAuto = !tortoiseAuto && rim == RimStyle.ACETATE && hsv[1] < 0.16f && std >= 12f && lum(med) in 60f..215f && bgLum > 190f
 
+        fun crystal(c: Int): Look = Look(mix(c, rgb(255, 255, 255), 0.15f), mix(c, rgb(255, 255, 255), 0.15f), Pattern.CRYSTAL)
         fun tortoise(): Look {
             val base = if (colourDist(dark, light) > 30f) dark else mix(med, rgb(40, 22, 10), 0.5f)
             val acc = if (colourDist(dark, light) > 30f) light else mix(med, rgb(235, 175, 95), 0.6f)
@@ -310,10 +416,11 @@ object FramePhotoAnalyzer {
         return when (choice) {
             PatternChoice.SOLID -> Look(med, med, Pattern.SOLID)
             PatternChoice.TORTOISE -> tortoise()
-            PatternChoice.CRYSTAL -> Look(mix(med, rgb(255, 255, 255), 0.35f), mix(med, rgb(255, 255, 255), 0.35f), Pattern.CRYSTAL)
+            PatternChoice.CRYSTAL -> crystal(med)
             PatternChoice.TWO_TONE -> Look(topMed, botMed, Pattern.GRADIENT)
             PatternChoice.AUTO -> when {
                 tortoiseAuto -> tortoise()
+                crystalAuto -> crystal(med)
                 twoToneAuto -> Look(topMed, botMed, Pattern.GRADIENT)
                 else -> Look(med, med, Pattern.SOLID)
             }
@@ -397,35 +504,38 @@ object FramePhotoAnalyzer {
     }
 }
 
-/** One frame <-> one text line, so user frames can be saved in a plain file and read back. */
+/** One frame <-> one text line, so user frames can be saved in a plain file and read back. Reads the older F1 format too. */
 object FrameCodec {
-    private const val V = "F1"
+    private const val V = "F2"
     fun encode(s: FrameSpec): String {
         val t = s.shape; val n = s.tint
         val name = s.name.replace('|', ' ').replace('\n', ' ').replace('\r', ' ')
+        val shape = listOf(t.width, t.height, t.squareness, t.taper, t.lift, t.topBoost, t.noseCut, t.facets, t.corner).joinToString(",") +
+            (t.radial?.let { ";" + it.joinToString(",") } ?: "")
         return listOf(
-            V, s.id, name, s.category.name,
-            listOf(t.width, t.height, t.squareness, t.taper, t.lift, t.topBoost, t.noseCut, t.facets, t.corner).joinToString(","),
+            V, s.id, name, s.category.name, shape,
             s.rim.name, s.frameColor, s.accentColor, s.pattern.name, s.metallic,
             listOf(n.color, n.opacity, n.mirror, n.gradient).joinToString(","),
-            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight).joinToString(",")
+            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight, s.doubleBridge).joinToString(",")
         ).joinToString("|")
     }
 
     fun decode(line: String): FrameSpec? = try {
         val p = line.split("|")
-        if (p.size != 12 || p[0] != V) null else {
-            val sh = p[4].split(",")
+        if (p.size != 12 || (p[0] != V && p[0] != "F1")) null else {
+            val shapeParts = p[4].split(";")
+            val sh = shapeParts[0].split(",")
+            val radial = shapeParts.getOrNull(1)?.split(",")?.map { it.toFloat() }?.toFloatArray()
             val ti = p[10].split(",")
             val ex = p[11].split(",")
             FrameSpec(
                 id = p[1], name = p[2], category = Category.valueOf(p[3]),
-                shape = LensShape(sh[0].toFloat(), sh[1].toFloat(), sh[2].toFloat(), sh[3].toFloat(), sh[4].toFloat(), sh[5].toFloat(), sh[6].toFloat(), sh[7].toInt(), sh[8].toFloat()),
+                shape = LensShape(sh[0].toFloat(), sh[1].toFloat(), sh[2].toFloat(), sh[3].toFloat(), sh[4].toFloat(), sh[5].toFloat(), sh[6].toFloat(), sh[7].toInt(), sh[8].toFloat(), radial),
                 rim = RimStyle.valueOf(p[5]), frameColor = p[6].toInt(), accentColor = p[7].toInt(),
                 pattern = Pattern.valueOf(p[8]), metallic = p[9].toBoolean(),
                 tint = LensTint(ti[0].toInt(), ti[1].toFloat(), ti[2].toFloat(), ti[3].toBoolean()),
                 rimWidth = ex[0].toFloat(), rimDepth = ex[1].toFloat(), bridgeWidth = ex[2].toFloat(), wrap = ex[3].toFloat(),
-                templeThickness = ex[4].toFloat(), templeHeight = ex[5].toFloat()
+                templeThickness = ex[4].toFloat(), templeHeight = ex[5].toFloat(), doubleBridge = ex.getOrNull(6)?.toBoolean() ?: false
             )
         }
     } catch (e: Exception) { null }

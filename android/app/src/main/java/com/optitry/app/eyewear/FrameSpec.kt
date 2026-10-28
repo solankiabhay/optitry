@@ -32,8 +32,32 @@ data class LensShape(
     val noseCut: Float = 0.22f,
     /** 0 = super-ellipse; 6 = hexagon (pointed at the sides), 8 = octagon (flat on every side). Corners are rounded by [corner]. */
     val facets: Int = 0,
-    val corner: Float = 0.18f
+    val corner: Float = 0.18f,
+    /**
+     * Measured outline (from a photo): [RADIAL_SAMPLES] radii in cm at equally spaced angles (0 = outer side, counter-clockwise),
+     * measured from the lens centre. When present it replaces the formula above, so any real lens shape can be reproduced.
+     */
+    val radial: FloatArray? = null
 ) {
+    override fun equals(other: Any?): Boolean =
+        other is LensShape && width == other.width && height == other.height && squareness == other.squareness &&
+            taper == other.taper && lift == other.lift && topBoost == other.topBoost && noseCut == other.noseCut &&
+            facets == other.facets && corner == other.corner && radial.contentEqualsNullable(other.radial)
+
+    override fun hashCode(): Int =
+        listOf(width, height, squareness, taper, lift, topBoost, noseCut, facets, corner, radial?.contentHashCode() ?: 0).hashCode()
+
+    private fun FloatArray?.contentEqualsNullable(o: FloatArray?): Boolean = if (this == null || o == null) this == null && o == null else this.contentEquals(o)
+
+    /** Outline from [radial]: linear interpolation in angle, so any segment count works. */
+    private fun radialContour(r: FloatArray, segments: Int): List<FloatArray> = List(segments) { i ->
+        val t = 2.0 * Math.PI * i / segments
+        val f = (t / (2.0 * Math.PI) * r.size)
+        val i0 = f.toInt() % r.size; val i1 = (i0 + 1) % r.size; val k = (f - f.toInt()).toFloat()
+        val rad = r[i0] * (1f - k) + r[i1] * k
+        floatArrayOf((rad * cos(t)).toFloat(), (rad * sin(t)).toFloat())
+    }
+
     /** Radius of the unit rounded polygon in direction [t] (circumradius 1, corners softened toward the inscribed circle). */
     private fun polyRadius(t: Double): Double {
         val n = facets
@@ -49,6 +73,7 @@ data class LensShape(
 
     /** Counter-clockwise contour of [segments] points around the lens centre, outer side at +x. */
     fun contour(segments: Int): List<FloatArray> {
+        radial?.let { if (it.size >= 8) return radialContour(it, segments) }
         val a = width / 2f
         val b = height / 2f
         val e = 2.0 / squareness
@@ -75,6 +100,8 @@ data class LensShape(
     }
 }
 
+const val RADIAL_SAMPLES = 72
+
 data class LensTint(
     val color: Int,            // 0xAARRGGBB, alpha ignored (use [opacity])
     val opacity: Float,        // 0.05 clear ... 0.85 dark
@@ -98,7 +125,9 @@ data class FrameSpec(
     val bridgeWidth: Float = 1.8f,
     val wrap: Float = 0.022f,
     val templeThickness: Float = if (rim == RimStyle.ACETATE) 0.30f else 0.19f,
-    val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.80f else 0.19f
+    val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.80f else 0.19f,
+    /** Pilot / double-bridge style: a straight brow bar across the top, above the nose bridge. */
+    val doubleBridge: Boolean = false
 ) {
     val isTranslucentFrame: Boolean get() = pattern == Pattern.CRYSTAL
 }
