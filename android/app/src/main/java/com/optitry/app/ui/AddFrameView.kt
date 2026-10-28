@@ -22,8 +22,10 @@ import android.widget.Spinner
 import android.widget.TextView
 import com.optitry.app.R
 import com.optitry.app.eyewear.Category
+import com.optitry.app.eyewear.LensPreset
 import com.optitry.app.eyewear.PatternChoice
 import com.optitry.app.eyewear.PhotoHints
+import com.optitry.app.eyewear.RimMode
 
 /** Full-screen form where the shop owner turns a photo of a real frame into a 3D frame. Framework views only. */
 class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
@@ -34,7 +36,7 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
         fun onCancel()
     }
 
-    class Request(val name: String, val category: Category, val hints: PhotoHints, val pattern: PatternChoice)
+    class Request(val name: String, val category: Category, val hints: PhotoHints, val pattern: PatternChoice, val mode: RimMode, val preset: LensPreset)
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Int) = (v * d).toInt()
@@ -44,6 +46,8 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
     private val nameField = EditText(context)
     private val sizeField = EditText(context)
     private val spinner = Spinner(context)
+    private val typeSpinner = Spinner(context)
+    private val shapeSpinner = Spinner(context)
     private val message = TextView(context)
     private val progress = ProgressBar(context)
     private val createButton = Button(context)
@@ -57,6 +61,13 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
         PatternChoice.AUTO to R.string.pattern_auto, PatternChoice.SOLID to R.string.pattern_solid,
         PatternChoice.TORTOISE to R.string.pattern_tortoise, PatternChoice.CRYSTAL to R.string.pattern_crystal,
         PatternChoice.TWO_TONE to R.string.pattern_two_tone
+    )
+
+    private val modes = listOf(RimMode.FULL to R.string.type_full, RimMode.HALF to R.string.type_half, RimMode.NONE to R.string.type_rimless)
+    private val presets = listOf(
+        LensPreset.RECTANGLE to R.string.shape_rectangle, LensPreset.SQUARE to R.string.shape_square, LensPreset.ROUND to R.string.shape_round,
+        LensPreset.OVAL to R.string.shape_oval, LensPreset.AVIATOR to R.string.shape_aviator, LensPreset.HEXAGON to R.string.shape_hexagon,
+        LensPreset.CAT_EYE to R.string.shape_cat_eye
     )
 
     init {
@@ -98,6 +109,16 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
 
         styleField(sizeField, context.getString(R.string.size_hint), InputType.TYPE_CLASS_TEXT)
         col.addView(sizeField, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(14) })
+
+        col.addView(label(context.getString(R.string.frame_type_label), 13f, 0xFFB4B4C0.toInt(), true).also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(14) })
+        typeSpinner.adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, modes.map { context.getString(it.second) })
+        typeSpinner.background = rounded(0x22FFFFFF, 12)
+        col.addView(typeSpinner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) })
+
+        col.addView(label(context.getString(R.string.lens_shape_label), 13f, 0xFFB4B4C0.toInt(), true).also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(14) })
+        shapeSpinner.adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, presets.map { context.getString(it.second) })
+        shapeSpinner.background = rounded(0x22FFFFFF, 12)
+        col.addView(shapeSpinner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) })
 
         col.addView(label(context.getString(R.string.pattern_label), 13f, 0xFFB4B4C0.toInt(), true).also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(14) })
         spinner.adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, patterns.map { context.getString(it.second) })
@@ -141,7 +162,7 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
 
     /** Clears the form for the next frame. */
     fun reset() {
-        setPreview(null); nameField.setText(""); sizeField.setText(""); spinner.setSelection(0)
+        setPreview(null); nameField.setText(""); sizeField.setText(""); spinner.setSelection(0); typeSpinner.setSelection(0); shapeSpinner.setSelection(0)
         category = Category.EYEGLASSES; styleTabs(); setBusy(false); setMessage(null, false)
     }
 
@@ -150,7 +171,8 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
         when {
             !hasPhoto -> setMessage(context.getString(R.string.pick_photo_first), true)
             name.isEmpty() -> setMessage(context.getString(R.string.name_required), true)
-            else -> callbacks.onSubmit(Request(name, category, PhotoHints.parse(sizeField.text.toString()), patterns[spinner.selectedItemPosition.coerceIn(0, patterns.size - 1)].first))
+            else -> callbacks.onSubmit(Request(name, category, PhotoHints.parse(sizeField.text.toString()), patterns[spinner.selectedItemPosition.coerceIn(0, patterns.size - 1)].first,
+                modes[typeSpinner.selectedItemPosition.coerceIn(0, modes.size - 1)].first, presets[shapeSpinner.selectedItemPosition.coerceIn(0, presets.size - 1)].first))
         }
     }
 

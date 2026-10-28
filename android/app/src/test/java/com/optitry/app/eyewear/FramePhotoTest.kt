@@ -260,7 +260,7 @@ class FramePhotoTest {
             val spec = FrameSpec(
                 id = "r$i", name = "r$i", category = Category.EYEGLASSES, shape = shape,
                 rim = rim, frameColor = argb(60, 60, 60), accentColor = argb(200, 200, 200), tint = LensTint(argb(190, 215, 225), 0.07f),
-                rimWidth = rimW, bridgeWidth = f(1.5f, 2.2f), doubleBridge = rnd.nextBoolean()
+                rimWidth = rimW, bridgeWidth = f(1.5f, 2.2f), doubleBridge = rnd.nextBoolean(), rimMode = RimMode.values()[rnd.nextInt(3)]
             )
             val g = EyewearGeometry.build(spec)
             for (mesh in listOf(g.frame, g.lenses)) for (v in 0 until mesh.vertexCount) {
@@ -276,5 +276,77 @@ class FramePhotoTest {
             }
             assertNotNull(g.hingeY)
         }
+    }
+
+    // ---- half-rim and rimless --------------------------------------------------------------------------------
+
+    /** Rimless: clear lenses (almost invisible), a metal bridge piece and two end pieces. Half-rim: rim only on the upper half. */
+    private fun renderOpen(half: Boolean, pxPerMm: Float = 6f, apW: Float = 52f, apH: Float = 36f, rim: Float = 4f, bridge: Float = 18f, metal: Int = argb(150, 150, 156), bg: Int = WHITE): Img {
+        val frameMm = 2 * (apW + 2 * rim) + bridge
+        val margin = 70
+        val w = (frameMm * pxPerMm).toInt() + 2 * margin
+        val h = ((apH + 2 * rim) * pxPerMm).toInt() + 2 * margin
+        val px = IntArray(w * h) { bg }
+        val cy = h / 2f
+        for (y in 0 until h) for (x in 0 until w) {
+            for (s in intArrayOf(-1, 1)) {
+                val cx = w / 2f + s * (bridge / 2 + rim + apW / 2) * pxPerMm
+                val u = s * (x - cx) / pxPerMm
+                val v = -(y - cy) / pxPerMm
+                fun inside(a: Float, b: Float) = abs(u / a).pow(3.2f) + abs(v / b).pow(3.2f) <= 1f
+                if (half && inside(apW / 2 + rim, apH / 2 + rim) && !inside(apW / 2, apH / 2) && v >= -0.1f * apH / 2) px[y * w + x] = metal
+            }
+            val topY = cy - apH * 0.30f * pxPerMm
+            if (abs(x - w / 2f) <= bridge / 2 * pxPerMm + 4 && abs(y - topY) <= 2f * pxPerMm) px[y * w + x] = metal       // bridge piece
+            for (s in intArrayOf(-1, 1)) {                                                                              // end pieces
+                val ex = w / 2f + s * (bridge / 2 + 2 * rim + apW + 1f) * pxPerMm
+                if (abs(x - ex) <= 3f * pxPerMm && abs(y - topY) <= 2.5f * pxPerMm) px[y * w + x] = metal
+            }
+        }
+        return Img(w, h, px, BooleanArray(w * h))
+    }
+
+    private fun analyzeOpen(img: Img, mode: RimMode, preset: LensPreset = LensPreset.RECTANGLE, hints: PhotoHints = PhotoHints.parse("52-18-140"), choice: PatternChoice = PatternChoice.AUTO, cat: Category = Category.EYEGLASSES) =
+        FramePhotoAnalyzer.analyzeOpen(img.px, img.w, img.h, "my-open", "Open", cat, hints, choice, mode, preset)
+
+    @Test fun rimlessFrameBecomesAThreePieceFrameWithTheChosenLensShape() {
+        val spec = ok(analyzeOpen(renderOpen(half = false), RimMode.NONE, LensPreset.OVAL))
+        assertEquals(RimMode.NONE, spec.rimMode)
+        assertEquals(RimStyle.WIRE, spec.rim)
+        assertTrue("width ${spec.shape.width}", spec.shape.width in 5.2f..5.55f)
+        assertTrue("oval is wider than tall: ${spec.shape.width} x ${spec.shape.height}", spec.shape.height < spec.shape.width * 0.8f)
+        assertTrue("colour ${chan(spec.frameColor).toList()}", near(spec.frameColor, 150, 150, 156, 30))
+        assertTrue(spec.shape.radial == null)
+    }
+
+    @Test fun halfRimKeepsTheMeasuredRimThickness() {
+        val spec = ok(analyzeOpen(renderOpen(half = true, metal = argb(20, 20, 24)), RimMode.HALF, LensPreset.RECTANGLE))
+        assertEquals(RimMode.HALF, spec.rimMode)
+        assertEquals(RimStyle.ACETATE, spec.rim)
+        assertTrue("rim ${spec.rimWidth}", spec.rimWidth in 0.34f..0.46f)
+        assertTrue("colour ${chan(spec.frameColor).toList()}", near(spec.frameColor, 20, 20, 24, 30))
+    }
+
+    @Test fun openFramesRejectCroppedAndEmptyPhotos() {
+        assertTrue(FramePhotoAnalyzer.analyzeOpen(IntArray(300 * 300) { WHITE }, 300, 300, "x", "x", Category.EYEGLASSES, PhotoHints(), PatternChoice.AUTO, RimMode.NONE, LensPreset.ROUND) is PhotoResult.Fail)
+        val cropped = renderOpen(half = true)
+        for (y in 0 until cropped.h) for (x in 0 until 30) cropped.px[y * cropped.w + x] = argb(20, 20, 24) // frame running off the edge
+        assertTrue(analyzeOpen(cropped, RimMode.HALF) is PhotoResult.Fail)
+    }
+
+    @Test fun everyLensPresetGivesAValidFrameInEveryMode() {
+        for (preset in LensPreset.values()) for (mode in listOf(RimMode.HALF, RimMode.NONE)) for (size in listOf("46-18", "52-18", "58-16")) {
+            val spec = ok(analyzeOpen(renderOpen(half = mode == RimMode.HALF), mode, preset, PhotoHints.parse(size)))
+            val g = EyewearGeometry.build(spec)
+            for (v in 0 until g.frame.vertexCount) { val p = g.frame.position(v); assertTrue("$preset/$mode/$size vertex $p", p.x.isFinite() && abs(p.x) < 8.9f && p.y > -1.2f && p.y < 5.95f) }
+        }
+    }
+
+    @Test fun rimModeSurvivesSavingAndLoading() {
+        for (mode in RimMode.values()) {
+            val spec = FrameCatalog.all.first().copy(id = "m-$mode", rimMode = mode)
+            assertEquals(spec, FrameCodec.decode(FrameCodec.encode(spec)))
+        }
+        assertEquals(RimMode.FULL, FrameCodec.decode(FrameCodec.encode(FrameCatalog.all.first()).replace("F3|", "F2|").replace(",FULL", ""))!!.rimMode) // older saved frames still load
     }
 }

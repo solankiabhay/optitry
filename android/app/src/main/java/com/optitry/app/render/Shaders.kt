@@ -115,7 +115,9 @@ void main() {
     float alpha = uAlpha;
     float F = 0.04 + 0.96 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
-    if (part > 2.5) {                           // hinge barrel
+    if (part > 3.5) {                           // nylon thread / bare lens edge: glassy and nearly clear
+        base = vec3(0.90, 0.93, 0.95); metal = 0.0; gloss = 0.5; alpha = min(alpha, 0.55);
+    } else if (part > 2.5) {                    // hinge barrel
         base = vec3(0.78, 0.80, 0.84); metal = 0.9;
     } else if (part > 1.5) {                    // silicone nose pad
         base = vec3(0.88, 0.91, 0.93); metal = 0.0; gloss = 0.3; alpha = min(alpha, 0.8);

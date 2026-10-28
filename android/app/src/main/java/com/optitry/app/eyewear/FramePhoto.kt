@@ -26,6 +26,21 @@ class PhotoHints(val lensMm: Float? = null, val bridgeMm: Float? = null) {
 
 enum class PatternChoice { AUTO, SOLID, TORTOISE, CRYSTAL, TWO_TONE }
 
+/**
+ * Half-rim and rimless frames have no closed rim to trace and the lenses are clear, so the lens outline cannot be read from a
+ * photo. The shop owner picks the nearest lens shape instead; width comes from the typed size (or the photo) and height from the shape.
+ */
+enum class LensPreset(val aspect: Float, private val squareness: Float, private val taper: Float = 0f, private val lift: Float = 0f, private val facets: Int = 0) {
+    ROUND(0.97f, 2.0f), OVAL(0.74f, 2.1f), RECTANGLE(0.70f, 4.0f), SQUARE(0.86f, 3.4f),
+    AVIATOR(0.88f, 2.3f, taper = -0.12f), HEXAGON(0.82f, 2.0f, facets = 6), CAT_EYE(0.76f, 2.7f, taper = 0.09f, lift = 0.35f);
+
+    fun shape(widthCm: Float): LensShape {
+        val w = widthCm.coerceIn(4.7f, 5.8f)
+        val h = (w * aspect).coerceIn(3.6f, 5.1f)
+        return LensShape(w, h, squareness, taper = taper, lift = lift, facets = facets, corner = 0.20f)
+    }
+}
+
 sealed class PhotoResult {
     class Ok(val spec: FrameSpec, val summary: String) : PhotoResult()
     class Fail(val reason: String) : PhotoResult()
@@ -305,6 +320,76 @@ object FramePhotoAnalyzer {
         return n.toFloat()
     }
 
+    /**
+     * Half-rim / rimless frames: the photo supplies the colour, the rim thickness (half-rim) and the scale; the lens outline comes
+     * from the chosen [preset]. Rimless frames are best photographed on a dark background so the bridge and screws show.
+     */
+    fun analyzeOpen(
+        px: IntArray, w: Int, h: Int, id: String, name: String, category: Category,
+        hints: PhotoHints, choice: PatternChoice, mode: RimMode, preset: LensPreset
+    ): PhotoResult {
+        if (w < 64 || h < 64 || px.size < w * h) return PhotoResult.Fail("Photo bahut chhoti hai. Badi photo lo.")
+        val bg = borderColour(px, w, h)
+        val mask = BooleanArray(w * h) { colourDist(px[it], bg) > FG_DIST }
+        val labels = IntArray(w * h)
+        val comps = label(mask, true, w, h, labels)
+        val minArea = max(12, (w * h * 0.0003f).toInt())
+        val keep = BooleanArray(comps.size + 1) { it > 0 && comps[it - 1].area >= minArea }
+        for (i in mask.indices) if (mask[i] && !keep[labels[i]]) mask[i] = false
+        var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE; var x1 = -1; var y1 = -1
+        for ((k, c) in comps.withIndex()) if (keep[k + 1]) { x0 = min(x0, c.x0); y0 = min(y0, c.y0); x1 = max(x1, c.x1); y1 = max(y1, c.y1) }
+        if (x1 < 0) return PhotoResult.Fail("Photo mein frame ka koi hissa nahi mila. Rimless ke liye gehre background par photo lo, taaki bridge aur screws dikhein.")
+        if (x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2)
+            return PhotoResult.Fail("Frame photo ke kinare se kata hua hai. Poora frame dikhe, charon taraf thodi jagah chhodo.")
+        val bw = x1 - x0 + 1
+        if (bw < w * 0.30f) return PhotoResult.Fail("Frame photo mein bahut chhota hai. Thoda paas se ya zoom karke photo lo.")
+
+        val bridgeMm = hints.bridgeMm ?: 18f
+        val pxPerMm = if (hints.lensMm != null) bw / (2 * hints.lensMm + bridgeMm + 6f) else bw / DEFAULT_FRONT_MM
+        val lensMm = (hints.lensMm ?: ((bw / pxPerMm - bridgeMm - 6f) / 2f)).coerceIn(44f, 62f)
+
+        // half-rim: thickness of the visible upper rim above the middle of each lens
+        var rimMm = 1.8f
+        if (mode == RimMode.HALF) {
+            val runs = ArrayList<Float>()
+            for (cx in intArrayOf(x0 + (bw * 0.27f).toInt(), x1 - (bw * 0.27f).toInt())) for (dx in -4..4 step 2) {
+                val xx = cx + dx
+                if (xx !in 0 until w) continue
+                var y = y0
+                while (y <= y1 && !mask[y * w + xx]) y++
+                var run = 0
+                while (y <= y1 && mask[y * w + xx]) { run++; y++ }
+                if (run > 0) runs += run.toFloat()
+            }
+            if (runs.isNotEmpty()) rimMm = (median(runs) / pxPerMm).coerceIn(1.2f, 7f)
+        }
+        val rimStyle = if (mode == RimMode.HALF && rimMm >= 2.8f) RimStyle.ACETATE else RimStyle.WIRE
+        val rimCm = if (rimStyle == RimStyle.ACETATE) (rimMm / 10f).coerceIn(0.34f, 0.62f) else (rimMm / 10f).coerceIn(0.15f, 0.22f)
+
+        // colour from whatever frame material is visible (rim / bridge / end pieces)
+        val midY = (y0 + y1) / 2
+        var total = 0
+        for (y in y0..y1) for (x in x0..x1) if (mask[y * w + x]) total++
+        val step = max(1, total / 1500)
+        val samples = ArrayList<Sample>()
+        var seen = 0
+        for (y in y0..y1) for (x in x0..x1) if (mask[y * w + x]) { if (seen++ % step == 0) samples += Sample(px[y * w + x], y < midY, y >= midY) }
+        var look = decideLook(samples, choice, rimStyle, lum(bg))
+        if (choice == PatternChoice.AUTO && look.pattern == Pattern.GRADIENT) look = Look(look.base, look.base, Pattern.SOLID)
+        val tint = if (category == Category.EYEGLASSES) LensTint(rgb(190, 215, 225), 0.07f) else LensTint(rgb(24, 28, 34), 0.78f)
+
+        val spec = FrameSpec(
+            id = id, name = name, category = category, shape = preset.shape((lensMm + rimMm) / 10f),
+            rim = rimStyle, frameColor = look.base, accentColor = look.accent, pattern = look.pattern,
+            metallic = rimStyle == RimStyle.WIRE, tint = tint, rimWidth = rimCm,
+            bridgeWidth = (bridgeMm / 10f).coerceIn(1.7f, 2.1f), rimMode = mode
+        )
+        val summary = "%s, lens %.0f mm (%s), bridge %.0f mm".format(
+            if (mode == RimMode.HALF) "Half-rim" else "Rimless", lensMm, preset.name.lowercase().replace('_', '-'), bridgeMm
+        )
+        return PhotoResult.Ok(spec, summary)
+    }
+
     // ------------------------------------------------------------------------------------------------ geometry
 
     /** Super-ellipse fill ratio f(n) = integral_0^1 (1 - x^n)^(1/n) dx (area / bounding box); inverted by bisection. */
@@ -506,7 +591,7 @@ object FramePhotoAnalyzer {
 
 /** One frame <-> one text line, so user frames can be saved in a plain file and read back. Reads the older F1 format too. */
 object FrameCodec {
-    private const val V = "F2"
+    private const val V = "F3"
     fun encode(s: FrameSpec): String {
         val t = s.shape; val n = s.tint
         val name = s.name.replace('|', ' ').replace('\n', ' ').replace('\r', ' ')
@@ -516,13 +601,13 @@ object FrameCodec {
             V, s.id, name, s.category.name, shape,
             s.rim.name, s.frameColor, s.accentColor, s.pattern.name, s.metallic,
             listOf(n.color, n.opacity, n.mirror, n.gradient).joinToString(","),
-            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight, s.doubleBridge).joinToString(",")
+            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight, s.doubleBridge, s.rimMode.name).joinToString(",")
         ).joinToString("|")
     }
 
     fun decode(line: String): FrameSpec? = try {
         val p = line.split("|")
-        if (p.size != 12 || (p[0] != V && p[0] != "F1")) null else {
+        if (p.size != 12 || (p[0] != V && p[0] != "F2" && p[0] != "F1")) null else {
             val shapeParts = p[4].split(";")
             val sh = shapeParts[0].split(",")
             val radial = shapeParts.getOrNull(1)?.split(",")?.map { it.toFloat() }?.toFloatArray()
@@ -535,7 +620,8 @@ object FrameCodec {
                 pattern = Pattern.valueOf(p[8]), metallic = p[9].toBoolean(),
                 tint = LensTint(ti[0].toInt(), ti[1].toFloat(), ti[2].toFloat(), ti[3].toBoolean()),
                 rimWidth = ex[0].toFloat(), rimDepth = ex[1].toFloat(), bridgeWidth = ex[2].toFloat(), wrap = ex[3].toFloat(),
-                templeThickness = ex[4].toFloat(), templeHeight = ex[5].toFloat(), doubleBridge = ex.getOrNull(6)?.toBoolean() ?: false
+                templeThickness = ex[4].toFloat(), templeHeight = ex[5].toFloat(), doubleBridge = ex.getOrNull(6)?.toBoolean() ?: false,
+                rimMode = ex.getOrNull(7)?.let { RimMode.valueOf(it) } ?: RimMode.FULL
             )
         }
     } catch (e: Exception) { null }

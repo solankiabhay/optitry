@@ -59,4 +59,16 @@
     <string name="name_required">Give the frame a name.</string>
     <string name="photo_load_failed">That photo could not be opened.</string>
     <string name="mine_badge">★ %1$s</string>
+    <string name="frame_type_label">Frame type</string>
+    <string name="type_full">Full rim</string>
+    <string name="type_half">Half rim</string>
+    <string name="type_rimless">Rimless (frameless)</string>
+    <string name="lens_shape_label">Lens shape (used for half rim and rimless)</string>
+    <string name="shape_round">Round</string>
+    <string name="shape_oval">Oval</string>
+    <string name="shape_rectangle">Rectangle</string>
+    <string name="shape_square">Square</string>
+    <string name="shape_aviator">Aviator</string>
+    <string name="shape_hexagon">Hexagon</string>
+    <string name="shape_cat_eye">Cat-eye</string>
 </resources>

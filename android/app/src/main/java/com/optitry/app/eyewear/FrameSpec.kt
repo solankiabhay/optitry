@@ -11,6 +11,9 @@ enum class Category { EYEGLASSES, SUNGLASSES }
 /** ACETATE = thick moulded rim; WIRE = thin metal tube rim with nose-pad arms. */
 enum class RimStyle { ACETATE, WIRE }
 
+/** FULL = rim all round the lens; HALF = rim on the upper part, thin nylon thread below ("supra"); NONE = rimless ("frameless"), lenses held by screws. */
+enum class RimMode { FULL, HALF, NONE }
+
 /** Surface pattern evaluated in the fragment shader (ids must match shader constants). */
 enum class Pattern(val id: Float) { SOLID(0f), TORTOISE(1f), GRADIENT(2f), CRYSTAL(3f) }
 
@@ -127,7 +130,8 @@ data class FrameSpec(
     val templeThickness: Float = if (rim == RimStyle.ACETATE) 0.30f else 0.19f,
     val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.80f else 0.19f,
     /** Pilot / double-bridge style: a straight brow bar across the top, above the nose bridge. */
-    val doubleBridge: Boolean = false
+    val doubleBridge: Boolean = false,
+    val rimMode: RimMode = RimMode.FULL
 ) {
     val isTranslucentFrame: Boolean get() = pattern == Pattern.CRYSTAL
 }
@@ -167,8 +171,8 @@ object FrameCatalog {
 
     private fun eye(i: Int, name: String, shape: LensShape, rim: RimStyle, c: Int, accent: Int = c,
                     pattern: Pattern = Pattern.SOLID, metal: Boolean = false, tint: LensTint = CLEAR,
-                    bridge: Float = 1.8f) =
-        FrameSpec("glass-%02d".format(i), name, Category.EYEGLASSES, shape, rim, c, accent, pattern, metal, tint, bridgeWidth = bridge)
+                    bridge: Float = 1.8f, mode: RimMode = RimMode.FULL) =
+        FrameSpec("glass-%02d".format(i), name, Category.EYEGLASSES, shape, rim, c, accent, pattern, metal, tint, bridgeWidth = bridge, rimMode = mode)
 
     private fun sun(i: Int, name: String, shape: LensShape, rim: RimStyle, c: Int, accent: Int = c,
                     pattern: Pattern = Pattern.SOLID, metal: Boolean = false, tint: LensTint,
@@ -257,7 +261,14 @@ object FrameCatalog {
         eye(77, "Gunmetal Hexagon", HEXAGON, RimStyle.WIRE, argb(96, 102, 112), metal = true),
         eye(78, "Titanium Light Rectangle", SLIM_RECT, RimStyle.WIRE, argb(170, 176, 186), metal = true),
         eye(79, "Rose Gold Round", ROUND, RimStyle.WIRE, argb(214, 150, 138), metal = true),
-        eye(80, "Matte Grey Square", SOFT_SQUARE, RimStyle.ACETATE, argb(96, 100, 108))
+        eye(80, "Matte Grey Square", SOFT_SQUARE, RimStyle.ACETATE, argb(96, 100, 108)),
+        // 81..86: half-rim ("supra") and rimless frames, very common in Indian optical shops
+        eye(81, "Half-Rim Black Rectangle", SLIM_RECT, RimStyle.ACETATE, argb(24, 24, 28), mode = RimMode.HALF),
+        eye(82, "Half-Rim Gunmetal", SLIM_RECT, RimStyle.WIRE, argb(96, 102, 112), metal = true, mode = RimMode.HALF),
+        eye(83, "Half-Rim Browline Gold", BROWLINE, RimStyle.ACETATE, argb(26, 26, 30), argb(214, 180, 100), Pattern.GRADIENT, mode = RimMode.HALF),
+        eye(84, "Rimless Round", ROUND, RimStyle.WIRE, argb(196, 202, 210), metal = true, mode = RimMode.NONE),
+        eye(85, "Rimless Rectangle Gold", SLIM_RECT, RimStyle.WIRE, argb(214, 178, 94), metal = true, mode = RimMode.NONE),
+        eye(86, "Rimless Oval Rose Gold", MODERN_OVAL, RimStyle.WIRE, argb(214, 150, 138), metal = true, mode = RimMode.NONE)
     )
 
     private val DARK = LensTint(argb(24, 28, 34), 0.78f)

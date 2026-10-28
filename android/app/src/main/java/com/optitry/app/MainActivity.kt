@@ -55,6 +55,7 @@ import com.optitry.app.eyewear.FrameCatalog
 import com.optitry.app.eyewear.FramePhotoAnalyzer
 import com.optitry.app.eyewear.MyFrameStore
 import com.optitry.app.eyewear.PhotoResult
+import com.optitry.app.eyewear.RimMode
 import com.optitry.app.eyewear.FrameSpec
 import com.optitry.app.render.GlassesRenderer
 import com.optitry.app.render.TryOnGlView
@@ -499,7 +500,9 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
                 val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * scale).roundToInt()), max(1, (bmp.height * scale).roundToInt()), true) else bmp
                 val px = IntArray(small.width * small.height)
                 small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
-                FramePhotoAnalyzer.analyze(px, small.width, small.height, "my-${System.currentTimeMillis()}", req.name, req.category, req.hints, req.pattern)
+                val fid = "my-${System.currentTimeMillis()}"
+                if (req.mode == RimMode.FULL) FramePhotoAnalyzer.analyze(px, small.width, small.height, fid, req.name, req.category, req.hints, req.pattern)
+                else FramePhotoAnalyzer.analyzeOpen(px, small.width, small.height, fid, req.name, req.category, req.hints, req.pattern, req.mode, req.preset)
             } catch (e: Throwable) {
                 Log.e(TAG, "frame analysis failed", e)
                 PhotoResult.Fail(e.message ?: e.javaClass.simpleName)

@@ -24,6 +24,7 @@ object EyewearGeometry {
     const val PART_TEMPLE = 1f
     const val PART_PAD = 2f
     const val PART_HINGE = 3f
+    const val PART_THREAD = 4f   // nylon thread / bare lens edge of half-rim and rimless frames (drawn clear)
     private const val CONTOUR_SEGMENTS = 72
     private const val LENS_RINGS = 5
     private const val LENS_BULGE = 0.10f
@@ -132,11 +133,56 @@ object EyewearGeometry {
     }
 
     private fun addRim(mb: MeshBuilder, spec: FrameSpec, l: Lens) {
-        val profile = if (spec.rim == RimStyle.ACETATE)
-            Profiles.roundedRect(spec.rimWidth, spec.rimDepth, min(spec.rimWidth, spec.rimDepth) * 0.38f, 3)
+        when (spec.rimMode) {
+            RimMode.FULL -> addFullRim(mb, spec, l)
+            RimMode.HALF -> addHalfRim(mb, spec, l)
+            RimMode.NONE -> addLensEdge(mb, spec, l)
+        }
+    }
+
+    private fun rimProfile(spec: FrameSpec) =
+        if (spec.rim == RimStyle.ACETATE) Profiles.roundedRect(spec.rimWidth, spec.rimDepth, min(spec.rimWidth, spec.rimDepth) * 0.38f, 3)
         else Profiles.circle(spec.rimWidth * 0.5f, 10)
+
+    private fun addFullRim(mb: MeshBuilder, spec: FrameSpec, l: Lens) {
         val su = if (spec.rim == RimStyle.ACETATE) l.widthScale else FloatArray(l.n) { 1f }
-        Sweeper.sweep(mb, l.rimPath, closed = true, profile = profile, uHint = l.outward, su = su, sv = null, part = PART_BODY, caps = false)
+        Sweeper.sweep(mb, l.rimPath, closed = true, profile = rimProfile(spec), uHint = l.outward, su = su, sv = null, part = PART_BODY, caps = false)
+    }
+
+    /** Point on the lens edge itself (no rim offset), nudged outward by [push] cm. */
+    private fun edgePoint(l: Lens, i: Int, push: Float): Vec3 {
+        val x = l.centerX + l.contour[i][0] + l.outward[i].x * push
+        val y = LENS_CENTER_Y + l.contour[i][1] + l.outward[i].y * push
+        return Vec3(x, y, frameZ(l.spec, x))
+    }
+
+    /** Rim along the upper part of the lens only; a hair-thin nylon thread (shown as a clear part) holds the lower edge. */
+    private fun addHalfRim(mb: MeshBuilder, spec: FrameSpec, l: Lens) {
+        val n = l.n
+        val cut = -0.12f * l.halfHeight
+        val inside = BooleanArray(n) { l.contour[it][1] >= cut }
+        var start = -1
+        for (i in 0 until n) if (inside[i] && !inside[(i + n - 1) % n]) { start = i; break }
+        if (start < 0) { addFullRim(mb, spec, l); return }
+        val upper = ArrayList<Int>()
+        var k = start
+        while (inside[k % n] && upper.size < n) { upper.add(k % n); k++ }
+        if (upper.size >= n - 1 || upper.size < 6) { addFullRim(mb, spec, l); return }
+        val su = if (spec.rim == RimStyle.ACETATE) FloatArray(upper.size) { l.widthScale[upper[it]] } else FloatArray(upper.size) { 1f }
+        Sweeper.sweep(mb, upper.map { l.rimPath[it] }, closed = false, profile = rimProfile(spec), uHint = upper.map { l.outward[it] }, su = su, sv = null, part = PART_BODY, caps = true)
+        // nylon thread: from the end of the rim, round the bottom, back to its start
+        val lower = ArrayList<Int>()
+        lower.add(upper.last())
+        var j = (upper.last() + 1) % n
+        while (!inside[j]) { lower.add(j); j = (j + 1) % n }
+        lower.add(upper.first())
+        if (lower.size >= 4)
+            Sweeper.sweep(mb, lower.map { edgePoint(l, it, 0.02f) }, closed = false, profile = Profiles.circle(0.02f, 6), uHint = lower.map { l.outward[it] }, su = null, sv = null, part = PART_THREAD, caps = true)
+    }
+
+    /** Rimless: only the thin glassy edge of the lens shows. */
+    private fun addLensEdge(mb: MeshBuilder, spec: FrameSpec, l: Lens) {
+        Sweeper.sweep(mb, List(l.n) { edgePoint(l, it, 0.03f) }, closed = true, profile = Profiles.circle(0.035f, 8), uHint = l.outward, su = null, sv = null, part = PART_THREAD, caps = false)
     }
 
     private fun addLens(mb: MeshBuilder, spec: FrameSpec, l: Lens) {
