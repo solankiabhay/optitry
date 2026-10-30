@@ -260,7 +260,8 @@ class FramePhotoTest {
             val spec = FrameSpec(
                 id = "r$i", name = "r$i", category = Category.EYEGLASSES, shape = shape,
                 rim = rim, frameColor = argb(60, 60, 60), accentColor = argb(200, 200, 200), tint = LensTint(argb(190, 215, 225), 0.07f),
-                rimWidth = rimW, bridgeWidth = f(1.5f, 2.2f), doubleBridge = rnd.nextBoolean(), rimMode = RimMode.values()[rnd.nextInt(3)]
+                rimWidth = rimW, bridgeWidth = f(1.5f, 2.2f), doubleBridge = rnd.nextBoolean(), rimMode = RimMode.values()[rnd.nextInt(3)],
+                templeHeight = f(0.15f, 1.0f), templeThickness = f(0.2f, 0.4f), templeTaper = f(0.45f, 1.3f), templeColor = argb(120, 120, 126), tipColor = argb(20, 20, 24), tipStart = f(0.5f, 0.85f)
             )
             val g = EyewearGeometry.build(spec)
             for (mesh in listOf(g.frame, g.lenses)) for (v in 0 until mesh.vertexCount) {
@@ -347,6 +348,89 @@ class FramePhotoTest {
             val spec = FrameCatalog.all.first().copy(id = "m-$mode", rimMode = mode)
             assertEquals(spec, FrameCodec.decode(FrameCodec.encode(spec)))
         }
-        assertEquals(RimMode.FULL, FrameCodec.decode(FrameCodec.encode(FrameCatalog.all.first()).replace("F3|", "F2|").replace(",FULL", ""))!!.rimMode) // older saved frames still load
+        val parts = FrameCodec.encode(FrameCatalog.all.first()).split("|").toMutableList()
+        parts[0] = "F2"; parts[11] = parts[11].split(",").take(7).joinToString(",") // what an older version wrote: no rim mode, no temple fields
+        val old = FrameCodec.decode(parts.joinToString("|"))!!
+        assertEquals(RimMode.FULL, old.rimMode); assertEquals(0, old.templeColor); assertEquals(0, old.tipColor)
+    }
+
+    // ---- separate temple photo ---------------------------------------------------------------------------------
+
+    /** A temple laid flat, hinge on the left: front section [front], then a differently coloured tip from [tipFrom]. */
+    private fun renderTemple(vertical: Boolean = false, lenMm: Float = 140f, hingeH: Float = 8f, tipH: Float = 5f, front: Int = BLACK, tip: Int = BLACK, tipFrom: Float = 0.7f, margin: Int = 60): Img {
+        val ppm = 6f
+        val a = (lenMm * ppm).toInt(); val c = (maxOf(hingeH, tipH) * ppm).toInt() + 2 * 20
+        val w = if (vertical) c + 2 * margin else a + 2 * margin
+        val h = if (vertical) a + 2 * margin else c + 2 * margin
+        val px = IntArray(w * h) { WHITE }
+        for (i in 0 until a) {
+            val t = i / a.toFloat()
+            val s = ((t - 0.55f) / 0.45f).coerceIn(0f, 1f)
+            val half = (hingeH + (tipH - hingeH) * (s * s * (3f - 2f * s))) * ppm / 2f
+            val colour = if (t >= tipFrom) tip else front
+            for (j in 0 until c) if (abs(j - c / 2f) <= half) {
+                if (vertical) px[(margin + i) * w + margin + j] = colour else px[(margin + j) * w + margin + i] = colour
+            }
+        }
+        return Img(w, h, px, BooleanArray(w * h))
+    }
+
+    private fun temple(img: Img, hints: PhotoHints = PhotoHints.parse("52-18-140")) = FramePhotoAnalyzer.analyzeTemple(img.px, img.w, img.h, hints)
+    private fun okT(r: TempleResult): TempleLook { assertTrue("expected Ok but was ${(r as? TempleResult.Fail)?.reason}", r is TempleResult.Ok); return (r as TempleResult.Ok).look }
+
+    @Test fun metalFrontWithRubberTipIsReadAsTwoParts() {
+        val look = okT(temple(renderTemple(hingeH = 8f, tipH = 7f, front = argb(150, 150, 156), tip = argb(20, 20, 24))))
+        assertTrue("height ${look.heightCm}", look.heightCm in 0.7f..0.9f)
+        assertTrue("front colour ${chan(look.color).toList()}", near(look.color, 150, 150, 156, 25))
+        assertTrue(look.metallic)
+        assertTrue("tip colour ${chan(look.tipColor).toList()}", look.tipColor != 0 && near(look.tipColor, 20, 20, 24, 30))
+        assertTrue("tip starts at ${look.tipStart}", look.tipStart in 0.6f..0.8f)
+        assertTrue("taper ${look.taper}", look.taper in 0.75f..1.0f)
+    }
+
+    @Test fun plainPlasticTempleHasNoSeparateTipAndTapers() {
+        val look = okT(temple(renderTemple(hingeH = 9f, tipH = 6f)))
+        assertEquals(0, look.tipColor)
+        assertTrue(!look.metallic)
+        assertTrue("height ${look.heightCm}", look.heightCm in 0.8f..1.0f)
+        assertTrue("thickness ${look.thicknessCm}", look.thicknessCm in 0.22f..0.38f)
+        assertTrue("taper ${look.taper}", look.taper in 0.55f..0.8f)
+    }
+
+    @Test fun thinGoldWireTempleIsDetected() {
+        val look = okT(temple(renderTemple(hingeH = 2f, tipH = 2f, front = argb(214, 178, 94), tip = argb(214, 178, 94))))
+        assertTrue("height ${look.heightCm}", look.heightCm in 0.15f..0.3f)
+        assertTrue(look.metallic)
+        assertEquals(0, look.tipColor)
+    }
+
+    @Test fun verticalTemplePhotoWorksToo() {
+        val look = okT(temple(renderTemple(vertical = true, hingeH = 8f, tipH = 5f, front = argb(150, 150, 156), tip = argb(20, 20, 24))))
+        assertTrue("height ${look.heightCm}", look.heightCm in 0.7f..0.9f)
+        assertTrue(look.tipColor != 0)
+    }
+
+    @Test fun badTemplePhotosAreRejected() {
+        val blob = Img(300, 300, IntArray(300 * 300) { x -> if ((x % 300) in 100..200 && (x / 300) in 100..200) BLACK else WHITE }, BooleanArray(300 * 300))
+        val r1 = temple(blob); assertTrue(r1 is TempleResult.Fail && r1.reason.contains("seedhi"))
+        val r2 = temple(renderTemple(margin = 0)); assertTrue(r2 is TempleResult.Fail && r2.reason.contains("kati"))
+        assertTrue(temple(Img(300, 300, IntArray(300 * 300) { WHITE }, BooleanArray(300 * 300))) is TempleResult.Fail)
+    }
+
+    @Test fun measuredTempleIsAppliedAndStaysSafeIn3D() {
+        val front = ok(analyze(render()))
+        val look = okT(temple(renderTemple(hingeH = 8f, tipH = 7f, front = argb(150, 150, 156), tip = argb(20, 20, 24))))
+        val spec = FramePhotoAnalyzer.withTemple(front, look)
+        assertEquals(look.color, spec.templeColor); assertEquals(look.tipColor, spec.tipColor); assertTrue(spec.templeMetallic)
+        assertEquals(spec, FrameCodec.decode(FrameCodec.encode(spec)))
+        val g = EyewearGeometry.build(spec)
+        for (v in 0 until g.frame.vertexCount) {
+            if (g.frame.vertices[v * MeshData.STRIDE_FLOATS + 6] != EyewearGeometry.PART_TEMPLE) continue
+            val p = g.frame.position(v)
+            assertTrue("arm inside head at $p", !Occluders.insideHead(p.x, p.y, p.z))
+            assertTrue("arm inside ear at $p", !Occluders.insideEar(p.x, p.y, p.z, if (p.x > 0) 1f else -1f, 0.9f))
+        }
+        assertEquals(140f, PhotoHints.parse("52-18-140").templeMm!!, 0f)
+        assertEquals(null, PhotoHints.parse("52-18").templeMm)
     }
 }

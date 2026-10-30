@@ -384,6 +384,12 @@ class GlassesRenderer(
         GLES20.glUniform1f(p.uniform("uPattern"), spec.pattern.id)
         GLES20.glUniform1f(p.uniform("uMetallic"), if (spec.metallic) 0.85f else 0f)
         GLES20.glUniform1f(p.uniform("uAlpha"), if (spec.pattern == Pattern.CRYSTAL) alpha else 1f)
+        val tc = rgb(spec.templeColor)
+        GLES20.glUniform4f(p.uniform("uTempleColor"), tc[0], tc[1], tc[2], if (spec.templeColor != 0) 1f else 0f)
+        val tip = rgb(spec.tipColor)
+        GLES20.glUniform4f(p.uniform("uTipColor"), tip[0], tip[1], tip[2], if (spec.tipColor != 0) 1f else 0f)
+        GLES20.glUniform1f(p.uniform("uTipStart"), if (spec.tipColor != 0) spec.tipStart else 2f)
+        GLES20.glUniform1f(p.uniform("uTempleMetal"), if (spec.templeMetallic) 0.85f else 0f)
         mesh.draw(p.attrib("aPos"), p.attrib("aNormal"), p.attrib("aAux"))
     }
 

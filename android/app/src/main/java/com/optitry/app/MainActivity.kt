@@ -56,6 +56,7 @@ import com.optitry.app.eyewear.FramePhotoAnalyzer
 import com.optitry.app.eyewear.MyFrameStore
 import com.optitry.app.eyewear.PhotoResult
 import com.optitry.app.eyewear.RimMode
+import com.optitry.app.eyewear.TempleResult
 import com.optitry.app.eyewear.FrameSpec
 import com.optitry.app.render.GlassesRenderer
 import com.optitry.app.render.TryOnGlView
@@ -119,6 +120,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private val myFrames = ArrayList<FrameSpec>()
     private var addView: AddFrameView? = null
     private var pendingFramePhoto: Bitmap? = null
+    private var pendingTemplePhoto: Bitmap? = null
     private val closeAddBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() { closeAddFrame() }
     }
@@ -139,6 +141,9 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     }
     private val pickFramePhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) loadFramePhoto(uri)
+    }
+    private val pickTemplePhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) loadTemplePhoto(uri)
     }
 
     // ---- lifecycle -------------------------------------------------------------------------------------
@@ -461,11 +466,13 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private fun showAddFrame() {
         val v = addView ?: AddFrameView(this, object : AddFrameView.Callbacks {
             override fun onPickPhoto() { pickFramePhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            override fun onPickTemplePhoto() { pickTemplePhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
             override fun onSubmit(request: AddFrameView.Request) { createFrame(request) }
             override fun onCancel() { closeAddFrame() }
         }).also { addView = it; root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
         v.reset()
         pendingFramePhoto = null
+        pendingTemplePhoto = null
         v.visibility = View.VISIBLE
         v.bringToFront()
         closeAddBack.isEnabled = true
@@ -474,6 +481,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
     private fun closeAddFrame() {
         addView?.visibility = View.GONE
         pendingFramePhoto = null
+        pendingTemplePhoto = null
         closeAddBack.isEnabled = false
     }
 
@@ -489,20 +497,45 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
         }
     }
 
+    private fun loadTemplePhoto(uri: Uri) {
+        io.execute {
+            try {
+                val bmp = decodePhoto(uri)
+                main.post { pendingTemplePhoto = bmp; addView?.setTemplePreview(bmp) }
+            } catch (e: Throwable) {
+                Log.e(TAG, "temple photo failed", e)
+                main.post { addView?.setMessage(getString(R.string.photo_load_failed), true) }
+            }
+        }
+    }
+
+    private fun pixelsOf(bmp: Bitmap): Triple<IntArray, Int, Int> {
+        val scale = min(1f, 720f / max(bmp.width, bmp.height))
+        val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * scale).roundToInt()), max(1, (bmp.height * scale).roundToInt()), true) else bmp
+        val px = IntArray(small.width * small.height)
+        small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
+        return Triple(px, small.width, small.height)
+    }
+
     private fun createFrame(req: AddFrameView.Request) {
         val bmp = pendingFramePhoto ?: return
         val view = addView ?: return
         view.setBusy(true)
+        val templeBmp = pendingTemplePhoto
         io.execute {
+            var templeNote: String? = null
             val outcome: PhotoResult = try {
-                val longest = max(bmp.width, bmp.height)
-                val scale = min(1f, 720f / longest)
-                val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * scale).roundToInt()), max(1, (bmp.height * scale).roundToInt()), true) else bmp
-                val px = IntArray(small.width * small.height)
-                small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
+                val (px, w, h) = pixelsOf(bmp)
                 val fid = "my-${System.currentTimeMillis()}"
-                if (req.mode == RimMode.FULL) FramePhotoAnalyzer.analyze(px, small.width, small.height, fid, req.name, req.category, req.hints, req.pattern)
-                else FramePhotoAnalyzer.analyzeOpen(px, small.width, small.height, fid, req.name, req.category, req.hints, req.pattern, req.mode, req.preset)
+                val front = if (req.mode == RimMode.FULL) FramePhotoAnalyzer.analyze(px, w, h, fid, req.name, req.category, req.hints, req.pattern)
+                else FramePhotoAnalyzer.analyzeOpen(px, w, h, fid, req.name, req.category, req.hints, req.pattern, req.mode, req.preset)
+                if (front is PhotoResult.Ok && templeBmp != null) {
+                    val (tp, tw, th) = pixelsOf(templeBmp)
+                    when (val t = FramePhotoAnalyzer.analyzeTemple(tp, tw, th, req.hints)) {
+                        is TempleResult.Ok -> PhotoResult.Ok(FramePhotoAnalyzer.withTemple(front.spec, t.look), front.summary + ". " + t.look.summary)
+                        is TempleResult.Fail -> { templeNote = t.reason; front }
+                    }
+                } else front
             } catch (e: Throwable) {
                 Log.e(TAG, "frame analysis failed", e)
                 PhotoResult.Fail(e.message ?: e.javaClass.simpleName)
@@ -515,7 +548,7 @@ class MainActivity : AppCompatActivity(), CameraController.Listener {
                         selection[outcome.spec.category] = outcome.spec
                         closeAddFrame()
                         setTab(if (outcome.spec.category == Category.SUNGLASSES) Tab.SUNGLASSES else Tab.EYEGLASSES)
-                        toast(getString(R.string.added_ok, outcome.summary))
+                        toast(if (templeNote != null) getString(R.string.temple_failed, templeNote) else getString(R.string.added_ok, outcome.summary))
                     }
                     is PhotoResult.Fail -> { view.setBusy(false); view.setMessage(outcome.reason, true) }
                 }

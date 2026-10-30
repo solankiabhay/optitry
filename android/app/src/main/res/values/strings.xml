@@ -71,4 +71,9 @@
     <string name="shape_aviator">Aviator</string>
     <string name="shape_hexagon">Hexagon</string>
     <string name="shape_cat_eye">Cat-eye</string>
+    <string name="add_temple_photo">Add temple photo (optional)</string>
+    <string name="change_temple_photo">Change temple photo</string>
+    <string name="temple_tips">Optional: photograph one temple (the arm) laid straight on a plain background, hinge end on the LEFT and tip on the right. The app copies its thickness, colours and rubber tip.</string>
+    <string name="added_with_temple">Frame added: %1$s. %2$s</string>
+    <string name="temple_failed">Frame added, but the temple photo could not be used: %1$s</string>
 </resources>

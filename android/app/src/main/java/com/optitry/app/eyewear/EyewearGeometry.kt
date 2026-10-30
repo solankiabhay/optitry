@@ -294,14 +294,24 @@ object EyewearGeometry {
     internal fun templeCenterline(spec: FrameSpec, side: Float, hingeX: Float, hingeY: Float): List<Vec3> {
         val hingeZ = frameZ(spec, hingeX) - 0.02f
         val rise = EAR_ARM_Y - hingeY
+        // temple height where it hooks behind the ear; the default frames (<= 4.8 mm there) sit exactly on the anchor, taller ones move back
+        val tipHeight = spec.templeHeight * when {
+            spec.templeTaper > 0f -> spec.templeTaper
+            spec.rim == RimStyle.ACETATE -> 0.60f
+            else -> 1.15f
+        }
+        val extraBack = max(0f, tipHeight * 0.5f - 0.25f)
+        // a thicker arm, or one moved back where the skull narrows, needs a little more room sideways behind the ear
+        val extraOut = max(0f, spec.templeThickness * 0.5f - 0.15f) + extraBack * 0.4f
         val controls = TEMPLE_X.indices.map { i ->
-            val x = if (i == 0) hingeX else max(TEMPLE_X[i], hingeX + 0.02f * i)
+            val x = (if (i == 0) hingeX else max(TEMPLE_X[i], hingeX + 0.02f * i)) + (if (i >= TEMPLE_RISE.size) extraOut else 0f)
             val y = when {
                 i == 0 -> hingeY
                 i < TEMPLE_RISE.size -> hingeY + rise * TEMPLE_RISE[i]
                 else -> EAR_ARM_Y - TEMPLE_DROP[i - TEMPLE_RISE.size]
             }
-            Vec3(side * x, y, if (i == 0) hingeZ else TEMPLE_Z[i])
+            val back = if (i >= TEMPLE_RISE.size) extraBack * (if (i == TEMPLE_RISE.size) 0.5f else 1f) else 0f
+            Vec3(side * x, y, if (i == 0) hingeZ else TEMPLE_Z[i] - back)
         }
         return Sweeper.catmullRom(controls, 7)
     }
@@ -311,11 +321,17 @@ object EyewearGeometry {
         val m = pts.size
         val hint = pts.map { Vec3(side, 0f, 0f) }
         val acetate = spec.rim == RimStyle.ACETATE
-        val profile = if (acetate) Profiles.roundedRect(spec.templeThickness, spec.templeHeight, min(spec.templeThickness, spec.templeHeight) * 0.4f, 3)
+        // a tall temple is a flat band even on a wire front (a 1 cm round rod would not exist); only thin ones are round wire
+        val flat = acetate || spec.templeHeight > 0.30f
+        val profile = if (flat) Profiles.roundedRect(spec.templeThickness, spec.templeHeight, min(spec.templeThickness, spec.templeHeight) * 0.4f, 3)
         else Profiles.circle(spec.templeHeight * 0.5f, 8)
         val sv = FloatArray(m) { i ->
             val t = i / (m - 1f)
-            if (acetate) 1f - 0.40f * smooth(0.55f, 1f, t) else 1f + 0.15f * smooth(0.82f, 1f, t) // wire arms get a slightly fatter tip
+            when {
+                spec.templeTaper > 0f -> 1f + (spec.templeTaper - 1f) * smooth(0.55f, 1f, t) // measured from the temple photo
+                acetate -> 1f - 0.40f * smooth(0.55f, 1f, t)
+                else -> 1f + 0.15f * smooth(0.82f, 1f, t) // wire arms get a slightly fatter tip
+            }
         }
         Sweeper.sweep(mb, pts, false, profile, hint, null, sv, PART_TEMPLE, true)
     }

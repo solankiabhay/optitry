@@ -131,7 +131,15 @@ data class FrameSpec(
     val templeHeight: Float = if (rim == RimStyle.ACETATE) 0.80f else 0.19f,
     /** Pilot / double-bridge style: a straight brow bar across the top, above the nose bridge. */
     val doubleBridge: Boolean = false,
-    val rimMode: RimMode = RimMode.FULL
+    val rimMode: RimMode = RimMode.FULL,
+    /** Temple look read from a separate temple photo; 0 = same colour/pattern as the front. */
+    val templeColor: Int = 0,
+    val templeMetallic: Boolean = false,
+    /** Different colour for the end of the temple (rubber tip); 0 = none. [tipStart] is where it begins (0 = hinge, 1 = tip). */
+    val tipColor: Int = 0,
+    val tipStart: Float = 0.7f,
+    /** Temple height at the tip relative to the hinge end; 0 = the default taper for the frame style. */
+    val templeTaper: Float = 0f
 ) {
     val isTranslucentFrame: Boolean get() = pattern == Pattern.CRYSTAL
 }

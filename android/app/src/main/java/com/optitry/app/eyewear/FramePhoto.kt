@@ -12,14 +12,15 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** Optional numbers printed on the frame ("52-18-140"): lens width and bridge in mm. They calibrate the photo's scale. */
-class PhotoHints(val lensMm: Float? = null, val bridgeMm: Float? = null) {
+class PhotoHints(val lensMm: Float? = null, val bridgeMm: Float? = null, val templeMm: Float? = null) {
     companion object {
         /** Parses "52-18-140", "52 18", "52/18/140" ... Returns empty hints if nothing sensible is found. */
         fun parse(text: String): PhotoHints {
             val nums = Regex("\\d{2,3}").findAll(text).map { it.value.toInt() }.toList()
             val lens = nums.getOrNull(0)?.takeIf { it in 40..64 }?.toFloat()
             val bridge = nums.getOrNull(1)?.takeIf { it in 10..26 }?.toFloat()
-            return if (lens == null) PhotoHints() else PhotoHints(lens, bridge)
+            val temple = nums.getOrNull(2)?.takeIf { it in 100..160 }?.toFloat()
+            return if (lens == null) PhotoHints() else PhotoHints(lens, bridge, temple)
         }
     }
 }
@@ -39,6 +40,17 @@ enum class LensPreset(val aspect: Float, private val squareness: Float, private 
         val h = (w * aspect).coerceIn(3.6f, 5.1f)
         return LensShape(w, h, squareness, taper = taper, lift = lift, facets = facets, corner = 0.20f)
     }
+}
+
+/** What the temple photo tells us: size, taper and the colour of the front section and of the tip. */
+class TempleLook(
+    val heightCm: Float, val thicknessCm: Float, val taper: Float, val color: Int, val metallic: Boolean,
+    val tipColor: Int, val tipStart: Float, val summary: String
+)
+
+sealed class TempleResult {
+    class Ok(val look: TempleLook) : TempleResult()
+    class Fail(val reason: String) : TempleResult()
 }
 
 sealed class PhotoResult {
@@ -390,6 +402,73 @@ object FramePhotoAnalyzer {
         return PhotoResult.Ok(spec, summary)
     }
 
+    /** Applies a measured temple to a frame built from the front photo. */
+    fun withTemple(spec: FrameSpec, t: TempleLook): FrameSpec = spec.copy(
+        templeHeight = t.heightCm, templeThickness = t.thicknessCm, templeTaper = t.taper,
+        templeColor = t.color, templeMetallic = t.metallic, tipColor = t.tipColor, tipStart = t.tipStart.coerceIn(0.4f, 0.9f)
+    )
+
+    /**
+     * A photo of one temple laid straight on a plain background, hinge end on the LEFT (or at the TOP for a vertical photo), tip on
+     * the other end. Reads the temple height and taper, the colour of the front section and, if different, of the tip (rubber tip).
+     */
+    fun analyzeTemple(px: IntArray, w: Int, h: Int, hints: PhotoHints = PhotoHints()): TempleResult {
+        if (w < 64 || h < 64 || px.size < w * h) return TempleResult.Fail("Photo bahut chhoti hai. Badi photo lo.")
+        val bg = borderColour(px, w, h)
+        val mask = BooleanArray(w * h) { colourDist(px[it], bg) > FG_DIST }
+        val labels = IntArray(w * h)
+        val comps = label(mask, true, w, h, labels)
+        val minArea = max(30, (w * h * 0.001f).toInt())
+        val keep = BooleanArray(comps.size + 1) { it > 0 && comps[it - 1].area >= minArea }
+        for (i in mask.indices) if (mask[i] && !keep[labels[i]]) mask[i] = false
+        var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE; var x1 = -1; var y1 = -1
+        for ((k, c) in comps.withIndex()) if (keep[k + 1]) { x0 = min(x0, c.x0); y0 = min(y0, c.y0); x1 = max(x1, c.x1); y1 = max(y1, c.y1) }
+        if (x1 < 0) return TempleResult.Fail("Photo mein dandi nahi mili. Saaf, plain background par dandi ki photo lo.")
+        if (x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2)
+            return TempleResult.Fail("Dandi photo ke kinare se kati hui hai. Poori dandi dikhe, charon taraf thodi jagah chhodo.")
+        val bw = x1 - x0 + 1; val bh = y1 - y0 + 1
+        val horizontal = bw >= bh
+        val length = max(bw, bh); val across = min(bw, bh)
+        if (length < across * 3f) return TempleResult.Fail("Dandi seedhi aur poori laambai mein dikhni chahiye. Dandi ko plain background par seedha litakar photo lo.")
+        if (length < max(w, h) * 0.30f) return TempleResult.Fail("Dandi photo mein bahut chhoti hai. Thoda paas se photo lo.")
+
+        fun at(a: Int, c: Int): Boolean = if (horizontal) mask[(y0 + c) * w + (x0 + a)] else mask[(y0 + a) * w + (x0 + c)]
+        fun pix(a: Int, c: Int): Int = if (horizontal) px[(y0 + c) * w + (x0 + a)] else px[(y0 + a) * w + (x0 + c)]
+        val thick = IntArray(length) { a -> var n = 0; for (c in 0 until across) if (at(a, c)) n++; n }
+        fun medThick(from: Float, to: Float): Float {
+            val v = ArrayList<Float>()
+            for (a in (length * from).toInt() until (length * to).toInt().coerceAtMost(length)) if (thick[a] > 0) v += thick[a].toFloat()
+            return median(v)
+        }
+        fun colourIn(from: Float, to: Float): Int? {
+            val cols = ArrayList<Int>()
+            for (a in (length * from).toInt() until (length * to).toInt().coerceAtMost(length) step 2) for (c in 0 until across step 2) if (at(a, c)) cols += pix(a, c)
+            return if (cols.size < 8) null else medianColour(cols)
+        }
+
+        val pxPerMm = length / (hints.templeMm ?: 140f)
+        val hHinge = medThick(0.08f, 0.25f); val hTip = medThick(0.85f, 0.97f)
+        if (hHinge <= 0f || hTip <= 0f) return TempleResult.Fail("Dandi ki shape samajh nahi aayi. Saaf photo lo.")
+        val hingeMm = hHinge / pxPerMm; val tipMm = hTip / pxPerMm
+
+        val front = colourIn(0.05f, 0.55f) ?: return TempleResult.Fail("Dandi ka rang samajh nahi aaya. Saaf photo lo.")
+        var tip = 0; var tipStart = 0f
+        for (k in 9..18) {                       // look for the place where the colour changes (rubber tip)
+            val from = k * 0.05f
+            val bucket = colourIn(from, from + 0.05f) ?: continue
+            if (colourDist(bucket, front) > 70f) { tipStart = from; tip = colourIn(from + 0.03f, 0.98f) ?: bucket; break }
+        }
+        val hsv = hsv(front)
+        val metallic = (hsv[1] < 0.22f && lum(front) > 105f) || (hsv[0] in 35f..55f && hsv[1] > 0.4f && hsv[2] > 0.55f)
+
+        val heightCm = (hingeMm / 10f).coerceIn(0.15f, 1.0f)
+        val acetateLike = hingeMm >= 3.4f
+        val thicknessCm = if (acetateLike) (heightCm * 0.42f).coerceIn(0.22f, 0.38f) else heightCm
+        val taper = (tipMm / hingeMm).coerceIn(0.45f, 1.3f).coerceAtMost(0.85f / heightCm) // a real temple tip is never taller than ~8.5 mm
+        val summary = "Temple %.1f mm high, %s%s".format(hingeMm, if (metallic) "metal" else "plastic", if (tip != 0) ", different tip colour" else "")
+        return TempleResult.Ok(TempleLook(heightCm, thicknessCm, taper, front or (0xFF shl 24), metallic, tip, tipStart, summary))
+    }
+
     // ------------------------------------------------------------------------------------------------ geometry
 
     /** Super-ellipse fill ratio f(n) = integral_0^1 (1 - x^n)^(1/n) dx (area / bounding box); inverted by bisection. */
@@ -591,7 +670,7 @@ object FramePhotoAnalyzer {
 
 /** One frame <-> one text line, so user frames can be saved in a plain file and read back. Reads the older F1 format too. */
 object FrameCodec {
-    private const val V = "F3"
+    private const val V = "F4"
     fun encode(s: FrameSpec): String {
         val t = s.shape; val n = s.tint
         val name = s.name.replace('|', ' ').replace('\n', ' ').replace('\r', ' ')
@@ -601,13 +680,13 @@ object FrameCodec {
             V, s.id, name, s.category.name, shape,
             s.rim.name, s.frameColor, s.accentColor, s.pattern.name, s.metallic,
             listOf(n.color, n.opacity, n.mirror, n.gradient).joinToString(","),
-            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight, s.doubleBridge, s.rimMode.name).joinToString(",")
+            listOf(s.rimWidth, s.rimDepth, s.bridgeWidth, s.wrap, s.templeThickness, s.templeHeight, s.doubleBridge, s.rimMode.name, s.templeColor, s.templeMetallic, s.tipColor, s.tipStart, s.templeTaper).joinToString(",")
         ).joinToString("|")
     }
 
     fun decode(line: String): FrameSpec? = try {
         val p = line.split("|")
-        if (p.size != 12 || (p[0] != V && p[0] != "F2" && p[0] != "F1")) null else {
+        if (p.size != 12 || (p[0] != V && p[0] != "F3" && p[0] != "F2" && p[0] != "F1")) null else {
             val shapeParts = p[4].split(";")
             val sh = shapeParts[0].split(",")
             val radial = shapeParts.getOrNull(1)?.split(",")?.map { it.toFloat() }?.toFloatArray()
@@ -621,7 +700,9 @@ object FrameCodec {
                 tint = LensTint(ti[0].toInt(), ti[1].toFloat(), ti[2].toFloat(), ti[3].toBoolean()),
                 rimWidth = ex[0].toFloat(), rimDepth = ex[1].toFloat(), bridgeWidth = ex[2].toFloat(), wrap = ex[3].toFloat(),
                 templeThickness = ex[4].toFloat(), templeHeight = ex[5].toFloat(), doubleBridge = ex.getOrNull(6)?.toBoolean() ?: false,
-                rimMode = ex.getOrNull(7)?.let { RimMode.valueOf(it) } ?: RimMode.FULL
+                rimMode = ex.getOrNull(7)?.let { RimMode.valueOf(it) } ?: RimMode.FULL,
+                templeColor = ex.getOrNull(8)?.toInt() ?: 0, templeMetallic = ex.getOrNull(9)?.toBoolean() ?: false,
+                tipColor = ex.getOrNull(10)?.toInt() ?: 0, tipStart = ex.getOrNull(11)?.toFloat() ?: 0.7f, templeTaper = ex.getOrNull(12)?.toFloat() ?: 0f
             )
         }
     } catch (e: Exception) { null }

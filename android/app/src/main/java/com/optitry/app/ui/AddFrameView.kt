@@ -32,6 +32,7 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
 
     interface Callbacks {
         fun onPickPhoto()
+        fun onPickTemplePhoto()
         fun onSubmit(request: Request)
         fun onCancel()
     }
@@ -43,6 +44,8 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
 
     private val preview = ImageView(context)
     private val pickButton = Button(context)
+    private val templePreview = ImageView(context)
+    private val templeButton = Button(context)
     private val nameField = EditText(context)
     private val sizeField = EditText(context)
     private val spinner = Spinner(context)
@@ -91,6 +94,18 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
         styleButton(pickButton, 0xFF7C3AED.toInt(), context.getString(R.string.choose_photo))
         pickButton.setOnClickListener { callbacks.onPickPhoto() }
         col.addView(pickButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(12) })
+
+        col.addView(label(context.getString(R.string.temple_tips), 12.5f, 0xFFB4B4C0.toInt(), false).also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(18) })
+        templePreview.apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = rounded(0xFF15151C.toInt(), 12, 0x33FFFFFF)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            visibility = View.GONE
+        }
+        col.addView(templePreview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(80)).apply { topMargin = dp(8) })
+        styleButton(templeButton, 0x33FFFFFF, context.getString(R.string.add_temple_photo))
+        templeButton.setOnClickListener { callbacks.onPickTemplePhoto() }
+        col.addView(templeButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) })
 
         col.addView(label(context.getString(R.string.frame_name), 13f, 0xFFB4B4C0.toInt(), true).also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(18) })
         styleField(nameField, context.getString(R.string.frame_name_hint), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS)
@@ -148,9 +163,15 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
         setMessage(null, false)
     }
 
+    fun setTemplePreview(bmp: Bitmap?) {
+        templePreview.setImageBitmap(bmp)
+        templePreview.visibility = if (bmp != null) View.VISIBLE else View.GONE
+        templeButton.text = context.getString(if (bmp != null) R.string.change_temple_photo else R.string.add_temple_photo)
+    }
+
     fun setBusy(busy: Boolean) {
         progress.visibility = if (busy) View.VISIBLE else View.GONE
-        createButton.isEnabled = !busy; pickButton.isEnabled = !busy; cancelButton.isEnabled = !busy
+        createButton.isEnabled = !busy; pickButton.isEnabled = !busy; templeButton.isEnabled = !busy; cancelButton.isEnabled = !busy
         if (busy) setMessage(context.getString(R.string.analysing_frame), false)
     }
 
@@ -162,7 +183,7 @@ class AddFrameView(context: Context, private val callbacks: Callbacks) : FrameLa
 
     /** Clears the form for the next frame. */
     fun reset() {
-        setPreview(null); nameField.setText(""); sizeField.setText(""); spinner.setSelection(0); typeSpinner.setSelection(0); shapeSpinner.setSelection(0)
+        setPreview(null); setTemplePreview(null); nameField.setText(""); sizeField.setText(""); spinner.setSelection(0); typeSpinner.setSelection(0); shapeSpinner.setSelection(0)
         category = Category.EYEGLASSES; styleTabs(); setBusy(false); setMessage(null, false)
     }
 

@@ -104,6 +104,10 @@ uniform float uPattern;   // 0 solid, 1 tortoise, 2 gradient (browline), 3 cryst
 uniform float uMetallic;
 uniform float uAlpha;
 uniform float uLensY;
+uniform vec4 uTempleColor;   // rgb + 1 when the temple has its own colour
+uniform vec4 uTipColor;      // rgb + 1 when the temple has a differently coloured tip
+uniform float uTipStart;
+uniform float uTempleMetal;
 void main() {
     vec3 N = normalize(vNormalCam);
     vec3 V = normalize(-vPosCam);
@@ -121,6 +125,12 @@ void main() {
         base = vec3(0.78, 0.80, 0.84); metal = 0.9;
     } else if (part > 1.5) {                    // silicone nose pad
         base = vec3(0.88, 0.91, 0.93); metal = 0.0; gloss = 0.3; alpha = min(alpha, 0.8);
+    } else if (part > 0.5 && uTempleColor.a > 0.5) {   // temple with its own colour(s) from the temple photo
+        base = uTempleColor.rgb; metal = uTempleMetal;
+        if (uTipColor.a > 0.5) {
+            float k = smoothstep(uTipStart, uTipStart + 0.04, vAux.y);
+            base = mix(base, uTipColor.rgb, k); metal = mix(metal, 0.0, k);
+        }
     } else if (uPattern > 0.5 && uPattern < 1.5) {
         float n = vnoise(vObj * vec3(2.2, 2.2, 1.1)) * 0.65 + vnoise(vObj * 6.5) * 0.35;
         base = mix(uBase, uAccent, smoothstep(0.42, 0.68, n));
